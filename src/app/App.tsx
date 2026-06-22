@@ -161,9 +161,6 @@ const createSeed = (): string => {
 const createSquadId = (armyId: ArmyId, unitTypeId: string): string =>
   `${armyId}-${unitTypeId}-${crypto.randomUUID()}`;
 
-const cloneSetup = (setup: BattleSetupDraft): BattleSetupDraft =>
-  JSON.parse(JSON.stringify(setup)) as BattleSetupDraft;
-
 const totalForArmy = (army: ArmyDraft): number =>
   army.squads.reduce((total, squad) => total + squad.count, 0);
 
@@ -1803,7 +1800,7 @@ const BattleApp = () => {
         protocolVersion: WORKER_PROTOCOL_VERSION,
         type: "start_simulation",
         requestId,
-        setup: cloneSetup(draft),
+        setup: structuredClone(draft),
       };
       worker.postMessage(request);
     },
@@ -1811,7 +1808,7 @@ const BattleApp = () => {
   );
 
   const runNewSeed = useCallback(() => {
-    const nextSetup = { ...cloneSetup(setup), seed: createSeed() };
+    const nextSetup = { ...structuredClone(setup), seed: createSeed() };
     setSetup(nextSetup);
     startBattle(nextSetup);
   }, [setup, startBattle]);

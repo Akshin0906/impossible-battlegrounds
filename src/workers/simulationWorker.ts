@@ -9,20 +9,6 @@ import {
 
 type SimulationWorkerPostMessage = (response: SimulationWorkerResponse) => void;
 
-export type SimulationWorkerDependencies = {
-  loadContentRegistry: typeof loadContentRegistry;
-  validateBattleSetupDraft: typeof validateBattleSetupDraft;
-  normalizeBattleSetup: typeof normalizeBattleSetup;
-  simulateBattle: typeof simulateBattle;
-};
-
-const defaultDependencies: SimulationWorkerDependencies = {
-  loadContentRegistry,
-  validateBattleSetupDraft,
-  normalizeBattleSetup,
-  simulateBattle,
-};
-
 const progress = (
   emit: SimulationWorkerPostMessage,
   requestId: string,
@@ -88,7 +74,6 @@ const incompatibleRequest = (request: unknown, emit: SimulationWorkerPostMessage
 export const handleSimulationWorkerRequest = (
   request: unknown,
   emit: SimulationWorkerPostMessage,
-  dependencies: SimulationWorkerDependencies = defaultDependencies,
 ): boolean => {
   if (!isSimulationWorkerRequest(request)) {
     incompatibleRequest(request, emit);
@@ -96,8 +81,8 @@ export const handleSimulationWorkerRequest = (
   }
   try {
     progress(emit, request.requestId, "Preparing terrain...", 0.08);
-    const registry = dependencies.loadContentRegistry();
-    const diagnostics = dependencies.validateBattleSetupDraft(request.setup, registry);
+    const registry = loadContentRegistry();
+    const diagnostics = validateBattleSetupDraft(request.setup, registry);
     if (diagnostics.length > 0) {
       const response: SimulationWorkerResponse = {
         protocolVersion: WORKER_PROTOCOL_VERSION,
@@ -110,10 +95,10 @@ export const handleSimulationWorkerRequest = (
       return true;
     }
     progress(emit, request.requestId, "Spawning armies...", 0.2);
-    const normalized = dependencies.normalizeBattleSetup(request.setup, registry);
+    const normalized = normalizeBattleSetup(request.setup, registry);
     progress(emit, request.requestId, "Calculating navigation and line of sight...", 0.34);
     progress(emit, request.requestId, "Simulating battle...", 0.52);
-    const result = dependencies.simulateBattle(normalized, registry);
+    const result = simulateBattle(normalized, registry);
     progress(emit, request.requestId, "Packing playback timeline...", 0.86);
     progress(emit, request.requestId, "Generating report...", 0.96);
     const response: SimulationWorkerResponse = {

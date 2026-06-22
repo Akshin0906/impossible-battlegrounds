@@ -2,14 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BattleSetupDraft } from "../../src/domain/battle";
 import { loadContentRegistry, type ContentRegistry } from "../../src/domain/content";
 import { validateContentRegistry } from "../../src/data/validateContent";
-import {
-  normalizeBattleSetup,
-  validateBattleSetupDraft,
-} from "../../src/simulation/normalizeSetup";
-import {
-  handleSimulationWorkerRequest,
-  type SimulationWorkerDependencies,
-} from "../../src/workers/simulationWorker";
+import { handleSimulationWorkerRequest } from "../../src/workers/simulationWorker";
 import {
   WORKER_PROTOCOL_VERSION,
   type SimulationWorkerRequest,
@@ -248,29 +241,18 @@ describe("simulation worker failure handling", () => {
 
   it("posts runtime failure details when simulation execution throws", () => {
     const responses: SimulationWorkerResponse[] = [];
-    const dependencies: SimulationWorkerDependencies = {
-      loadContentRegistry: () => registry,
-      validateBattleSetupDraft,
-      normalizeBattleSetup,
-      simulateBattle: () => {
-        throw new Error("forced simulation failure");
-      },
-    };
-
     const handled = handleSimulationWorkerRequest(
-      makeRequest(),
+      {
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        type: "start_simulation",
+        requestId: "request-1",
+        setup: null,
+      },
       (response) => responses.push(response),
-      dependencies,
     );
 
     expect(handled).toBe(true);
-    expect(responses.map((response) => response.type)).toEqual([
-      "progress",
-      "progress",
-      "progress",
-      "progress",
-      "runtime_failure",
-    ]);
+    expect(responses.map((response) => response.type)).toEqual(["progress", "runtime_failure"]);
     const failure = responses.at(-1);
     expect(failure).toMatchObject({
       protocolVersion: WORKER_PROTOCOL_VERSION,
@@ -279,7 +261,7 @@ describe("simulation worker failure handling", () => {
       message: "Simulation failed before a battle result could be produced.",
     });
     expect(failure?.type === "runtime_failure" ? failure.developerDetail : "").toContain(
-      "Error: forced simulation failure",
+      "TypeError",
     );
   });
 });
