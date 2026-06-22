@@ -4,7 +4,9 @@ import {
   ArrowLeft,
   Bug,
   Camera,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
   Crosshair,
   Gauge,
@@ -20,10 +22,12 @@ import {
   Swords,
   Trash2,
 } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Component,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -74,6 +78,12 @@ type SimulationError = {
 type AppErrorBoundaryState = {
   error: Error | null;
   errorInfo: ErrorInfo | null;
+};
+
+type SelectMenuOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
 };
 
 const SIMULATION_TIMEOUT_MS = 60_000;
@@ -282,6 +292,75 @@ const SummaryTile = ({
   </div>
 );
 
+const SelectMenu = ({
+  label,
+  value,
+  options,
+  onChange,
+  invalid = false,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  options: SelectMenuOption[];
+  onChange: (value: string) => void;
+  invalid?: boolean;
+  compact?: boolean;
+}) => {
+  const labelId = useId();
+  const valueId = useId();
+  const selectedOption = options.find((option) => option.value === value);
+
+  return (
+    <div className={compact ? "select-menu-field select-menu-field-compact" : "select-menu-field"}>
+      <span className="field-label" id={labelId}>
+        {label}
+      </span>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button
+            aria-invalid={invalid || undefined}
+            aria-labelledby={`${labelId} ${valueId}`}
+            className="select-menu-trigger"
+            type="button"
+          >
+            <span className="select-menu-value" id={valueId}>
+              {selectedOption?.label ?? "Select option"}
+            </span>
+            <ChevronDown aria-hidden="true" size={16} />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            align="start"
+            className="select-menu-content"
+            sideOffset={6}
+            collisionPadding={12}
+          >
+            <DropdownMenu.RadioGroup value={value} onValueChange={onChange}>
+              {options.map((option) => (
+                <DropdownMenu.RadioItem
+                  className="select-menu-item"
+                  disabled={option.disabled}
+                  key={option.value}
+                  value={option.value}
+                >
+                  <span className="select-menu-item-check">
+                    <DropdownMenu.ItemIndicator>
+                      <Check aria-hidden="true" size={14} />
+                    </DropdownMenu.ItemIndicator>
+                  </span>
+                  <span>{option.label}</span>
+                </DropdownMenu.RadioItem>
+              ))}
+            </DropdownMenu.RadioGroup>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  );
+};
+
 const TitleScreen = ({
   registry,
   setup,
@@ -455,21 +534,17 @@ const ArmyPanel = ({
                 <span className="role-badge">{roleLabels[squad.deploymentRole]}</span>
               </div>
               <div className="squad-main">
-                <label>
-                  <span>Unit</span>
-                  <select
-                    value={squad.unitTypeId}
-                    onChange={(event) =>
-                      updateSquad(index, updateSquadForUnit(registry, squad, event.target.value))
-                    }
-                  >
-                    {registry.units.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>
-                        {candidate.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SelectMenu
+                  label="Unit"
+                  value={squad.unitTypeId}
+                  options={registry.units.map((candidate) => ({
+                    value: candidate.id,
+                    label: candidate.displayName,
+                  }))}
+                  onChange={(nextUnitTypeId) =>
+                    updateSquad(index, updateSquadForUnit(registry, squad, nextUnitTypeId))
+                  }
+                />
                 <label>
                   <span>Count</span>
                   <input
@@ -492,38 +567,30 @@ const ArmyPanel = ({
                 </label>
               </div>
               <div className="squad-grid">
-                <label>
-                  <span>Loadout</span>
-                  <select
-                    aria-invalid={!unit.allowedLoadouts.includes(squad.loadoutId) || undefined}
-                    value={squad.loadoutId}
-                    onChange={(event) =>
-                      updateSquad(index, applyLoadout(registry, squad, event.target.value))
-                    }
-                  >
-                    {allowedLoadouts.map((loadout) => (
-                      <option key={loadout.id} value={loadout.id}>
-                        {loadout.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Formation</span>
-                  <select
-                    aria-invalid={!unit.allowedFormations.includes(squad.formationId) || undefined}
-                    value={squad.formationId}
-                    onChange={(event) =>
-                      updateSquad(index, { ...squad, formationId: event.target.value })
-                    }
-                  >
-                    {unit.allowedFormations.map((formationId) => (
-                      <option key={formationId} value={formationId}>
-                        {registry.formationMap.get(formationId)!.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SelectMenu
+                  invalid={!unit.allowedLoadouts.includes(squad.loadoutId)}
+                  label="Loadout"
+                  value={squad.loadoutId}
+                  options={allowedLoadouts.map((loadout) => ({
+                    value: loadout.id,
+                    label: loadout.displayName,
+                  }))}
+                  onChange={(nextLoadoutId) =>
+                    updateSquad(index, applyLoadout(registry, squad, nextLoadoutId))
+                  }
+                />
+                <SelectMenu
+                  invalid={!unit.allowedFormations.includes(squad.formationId)}
+                  label="Formation"
+                  value={squad.formationId}
+                  options={unit.allowedFormations.map((formationId) => ({
+                    value: formationId,
+                    label: registry.formationMap.get(formationId)!.displayName,
+                  }))}
+                  onChange={(nextFormationId) =>
+                    updateSquad(index, { ...squad, formationId: nextFormationId })
+                  }
+                />
               </div>
               <div className="toggle-strip" aria-label="Loadout modifiers">
                 {Object.entries(currentLoadout.toggles).map(([key, value]) => {
@@ -548,24 +615,19 @@ const ArmyPanel = ({
                   const selectedToggleValue =
                     typeof squad.toggles[key] === "string" ? squad.toggles[key] : value;
                   return (
-                    <label className="mini-select" key={key}>
-                      <span>{key}</span>
-                      <select
-                        value={selectedToggleValue}
-                        onChange={(event) =>
-                          updateSquad(index, {
-                            ...squad,
-                            toggles: { ...squad.toggles, [key]: event.target.value },
-                          })
-                        }
-                      >
-                        {options.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <SelectMenu
+                      compact
+                      key={key}
+                      label={key}
+                      value={selectedToggleValue}
+                      options={options.map((option) => ({ value: option, label: option }))}
+                      onChange={(nextToggleValue) =>
+                        updateSquad(index, {
+                          ...squad,
+                          toggles: { ...squad.toggles, [key]: nextToggleValue },
+                        })
+                      }
+                    />
                   );
                 })}
               </div>
@@ -692,34 +754,26 @@ const SetupScreen = ({
           <strong className="odds-pill">{odds}</strong>
         </div>
         <div className="setup-control-grid">
-          <label>
-            <span>Terrain</span>
-            <select
-              value={setup.terrainId}
-              onChange={(event) => setSetup({ ...setup, terrainId: event.target.value })}
-            >
-              {registry.terrains.map((terrain) => (
-                <option key={terrain.id} value={terrain.id}>
-                  {terrain.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Starting distance</span>
-            <select
-              value={setup.startingDistance}
-              onChange={(event) =>
-                setSetup({ ...setup, startingDistance: Number(event.target.value) })
-              }
-            >
-              {distanceOptions.map((distance) => (
-                <option key={distance} value={distance}>
-                  {distance} meters
-                </option>
-              ))}
-            </select>
-          </label>
+          <SelectMenu
+            label="Terrain"
+            value={setup.terrainId}
+            options={registry.terrains.map((terrain) => ({
+              value: terrain.id,
+              label: terrain.displayName,
+            }))}
+            onChange={(nextTerrainId) => setSetup({ ...setup, terrainId: nextTerrainId })}
+          />
+          <SelectMenu
+            label="Starting distance"
+            value={String(setup.startingDistance)}
+            options={distanceOptions.map((distance) => ({
+              value: String(distance),
+              label: `${distance} meters`,
+            }))}
+            onChange={(nextDistance) =>
+              setSetup({ ...setup, startingDistance: Number(nextDistance) })
+            }
+          />
           <label className="seed-label">
             <span>Seed</span>
             <input
