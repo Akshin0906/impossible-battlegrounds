@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const DEFAULT_RESULT_HASH = "66adae9b";
+const DEFAULT_RESULT_HASH = "17fab4d5";
 
 const collectConsoleErrors = (page: Page): string[] => {
   const errors: string[] = [];
@@ -39,7 +39,7 @@ test.describe("Impossible Battlegrounds user flow", () => {
     await expect(page.getByRole("heading", { name: "Battle report" })).toBeVisible();
     await expect(page.getByText(DEFAULT_RESULT_HASH)).toBeVisible();
     await expect(page.getByText(/Key contributing factors/i)).toBeVisible();
-    await expect(page.getByText(/Rifle fire/i).first()).toBeVisible();
+    await expect(page.getByText(/Projectile fire/i).first()).toBeVisible();
     expect(consoleErrors).toEqual([]);
   });
 

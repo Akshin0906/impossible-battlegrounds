@@ -29,20 +29,31 @@ import {
   distance2,
   distanceSq2,
   headingTo,
-  moveAway,
-  moveToward,
   percent,
   quantize,
   quantizeVec3,
 } from "./deterministicMath";
 import { hashObject } from "./resultHash";
 import { createRngStreams, type DeterministicRng } from "./rng";
-import { generateRuntimeTerrain, hasLineOfSight, nearestCover, terrainHeightAt } from "./terrain";
+import {
+  generateRuntimeTerrain,
+  hasLineOfSight,
+  isMovementBlockedAt,
+  movementBlockersBetween,
+  nearestCover,
+  obstacleAabb,
+  terrainHeightAt,
+} from "./terrain";
 
 const TICK_SECONDS = 0.2;
 const SAMPLE_INTERVAL = 0.4;
 const SAMPLE_TICKS = 2;
 const MAX_TICKS = 6000;
+const NO_PROGRESS_CHECK_TICKS = 50;
+const NO_PROGRESS_CHECK_LIMIT = 8;
+const NO_TACTICAL_PROGRESS_CHECK_LIMIT = 36;
+const NO_MEANINGFUL_PROGRESS_TICKS = NO_PROGRESS_CHECK_TICKS * NO_PROGRESS_CHECK_LIMIT;
+const NO_TACTICAL_PROGRESS_TICKS = NO_PROGRESS_CHECK_TICKS * NO_TACTICAL_PROGRESS_CHECK_LIMIT;
 type WeaponRuntime = {
   weapon: WeaponDefinition;
   ammoRemaining: number;
@@ -54,6 +65,7 @@ type WeaponRuntime = {
   reloads: number;
   explosivesUsed: number;
   friendlyCasualties: number;
+  ammoLowEmitted: boolean;
 };
 
 type SimUnit = UnitFinalState & {
@@ -72,6 +84,7 @@ type SimUnit = UnitFinalState & {
   armorBoost: number;
   initialHealth: number;
   squadInitialCount: number;
+  rampageAlerted: boolean;
 };
 
 type SquadRuntime = {
@@ -107,7 +120,7 @@ type SimulationMetrics = {
   damageByCause: Record<DamageCause, number>;
   ammo: Map<string, AmmoMetric>;
   firstRout?: { squadId: string; time: number };
-  armyCollapse?: { armyId: ArmyId; time: number };
+  armyCollapse: Partial<Record<ArmyId, { armyId: ArmyId; time: number }>>;
 };
 
 type RngStreams = ReturnType<typeof createRngStreams>;
@@ -137,6 +150,7 @@ const createMetrics = (): SimulationMetrics => ({
   preventedDamage: { A: 0, B: 0 },
   damageByCause: emptyCasualtySummary(),
   ammo: new Map(),
+  armyCollapse: {},
 });
 
 const metricKey = (armyId: ArmyId, weaponId: string): string => `${armyId}:${weaponId}`;
@@ -169,6 +183,9 @@ const isAlive = (unit: SimUnit): boolean => unit.healthState !== "dead";
 const isCombatEffective = (unit: SimUnit): boolean =>
   unit.healthState !== "dead" && unit.healthState !== "downed" && unit.moraleState !== "routing";
 
+const hasCombatEffectiveArmy = (units: SimUnit[], armyId: ArmyId): boolean =>
+  units.some((unit) => unit.armyId === armyId && isCombatEffective(unit));
+
 const canAct = (unit: SimUnit): boolean => isCombatEffective(unit);
 
 const hasNoMorale = (unit: SimUnit): boolean => unit.definition.traits.includes("no_morale");
@@ -200,6 +217,44 @@ const healthStateForHealth = (health: number, wounds: WoundState[]): HealthState
   return "healthy";
 };
 
+const uniqueWeaponIds = (weaponIds: string[]): string[] => [...new Set(weaponIds)];
+
+const withoutWeapon = (weaponIds: string[], weaponId: string): string[] =>
+  weaponIds.filter((candidate) => candidate !== weaponId);
+
+const withWeapon = (weaponIds: string[], weaponId: string): string[] =>
+  uniqueWeaponIds([...weaponIds, weaponId]);
+
+const resolveRuntimeLoadout = (
+  loadout: LoadoutDefinition,
+  squad: NormalizedSquad,
+): LoadoutDefinition => {
+  const toggles = { ...loadout.toggles, ...squad.toggles };
+  let weapons = [...loadout.weapons];
+  if ("grenades" in toggles) {
+    weapons =
+      toggles.grenades === true
+        ? withWeapon(weapons, "grenade_m67")
+        : withoutWeapon(weapons, "grenade_m67");
+  }
+  if ("bow" in toggles) {
+    weapons =
+      toggles.bow === true ? withWeapon(weapons, "yumi_bow") : withoutWeapon(weapons, "yumi_bow");
+  }
+  if ("spear" in toggles) {
+    weapons = toggles.spear === true ? withWeapon(weapons, "yari") : withoutWeapon(weapons, "yari");
+  }
+  if ("lanceCharge" in toggles) {
+    weapons =
+      toggles.lanceCharge === true ? withWeapon(weapons, "lance") : withoutWeapon(weapons, "lance");
+  }
+  if ("heavyWeapon" in toggles) {
+    weapons = withoutWeapon(withoutWeapon(weapons, "android_rifle"), "android_heavy_rifle");
+    weapons.unshift(toggles.heavyWeapon === true ? "android_heavy_rifle" : "android_rifle");
+  }
+  return { ...loadout, weapons: uniqueWeaponIds(weapons), toggles };
+};
+
 const initialAmmoForWeapon = (weapon: WeaponDefinition, loadout: LoadoutDefinition): number => {
   if (weapon.magazineSize <= 0) {
     return 0;
@@ -226,6 +281,7 @@ const buildWeaponRuntime = (
     reloads: 0,
     explosivesUsed: 0,
     friendlyCasualties: 0,
+    ammoLowEmitted: false,
   };
 };
 
@@ -297,6 +353,169 @@ const roleLane = (
   return ((squadOrdinal % 7) - 3) * 10;
 };
 
+const clampToTerrain = (terrain: RuntimeTerrain, position: Vec3, margin = 4): Vec3 => {
+  const halfX = terrain.definition.size.x / 2 - margin;
+  const halfZ = terrain.definition.size.z / 2 - margin;
+  const x = clamp(position.x, -halfX, halfX);
+  const z = clamp(position.z, -halfZ, halfZ);
+  return quantizeVec3({ x, y: terrainHeightAt(terrain.definition, x, z), z });
+};
+
+const findOpenPosition = (terrain: RuntimeTerrain, desired: Vec3, padding = 0.8): Vec3 => {
+  const clamped = clampToTerrain(terrain, desired);
+  if (!isMovementBlockedAt(terrain, clamped, padding)) {
+    return clamped;
+  }
+  for (let ring = 1; ring <= 12; ring += 1) {
+    const radius = ring * 2.5;
+    const samples = 8 + ring * 4;
+    for (let sample = 0; sample < samples; sample += 1) {
+      const angle = (Math.PI * 2 * sample) / samples;
+      const candidate = clampToTerrain(terrain, {
+        x: desired.x + Math.cos(angle) * radius,
+        y: desired.y,
+        z: desired.z + Math.sin(angle) * radius,
+      });
+      if (!isMovementBlockedAt(terrain, candidate, padding)) {
+        return candidate;
+      }
+    }
+  }
+  return clamped;
+};
+
+const movementPathClear = (
+  terrain: RuntimeTerrain,
+  current: Vec3,
+  destination: Vec3,
+  padding = 0.6,
+): boolean =>
+  !isMovementBlockedAt(terrain, destination, padding) &&
+  movementBlockersBetween(terrain, current, destination, padding).length === 0;
+
+const MOVEMENT_FALLBACK_ANGLES = [
+  0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90, 120, -120, 150, -150, 180,
+] as const;
+
+const moveDirectionalOpen = (
+  terrain: RuntimeTerrain,
+  current: Vec3,
+  directionX: number,
+  directionZ: number,
+  maxDistance: number,
+  scoreCandidate: (candidate: Vec3) => number,
+): Vec3 => {
+  const length = Math.hypot(directionX, directionZ);
+  if (length <= 0.001 || maxDistance <= 0) {
+    return current;
+  }
+  const unitX = directionX / length;
+  const unitZ = directionZ / length;
+  let best: Vec3 | undefined;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const angle of MOVEMENT_FALLBACK_ANGLES) {
+    const radians = (angle * Math.PI) / 180;
+    const rotatedX = unitX * Math.cos(radians) - unitZ * Math.sin(radians);
+    const rotatedZ = unitX * Math.sin(radians) + unitZ * Math.cos(radians);
+    const candidate = clampToTerrain(terrain, {
+      x: current.x + rotatedX * maxDistance,
+      y: current.y,
+      z: current.z + rotatedZ * maxDistance,
+    });
+    if (
+      distanceSq2(candidate, current) < 0.01 ||
+      !movementPathClear(terrain, current, candidate, 0.6)
+    ) {
+      continue;
+    }
+    const score = scoreCandidate(candidate) + Math.abs(angle) * 0.015;
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best ?? current;
+};
+
+const cornerWaypointAroundBlocker = (
+  terrain: RuntimeTerrain,
+  current: Vec3,
+  target: Vec3,
+  padding = 0.6,
+): Vec3 | undefined => {
+  let best: Vec3 | undefined;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const blocker of movementBlockersBetween(terrain, current, target, padding)) {
+    const bounds = obstacleAabb(blocker, padding + 4);
+    const corners = [
+      { x: bounds.minX, z: bounds.minZ },
+      { x: bounds.minX, z: bounds.maxZ },
+      { x: bounds.maxX, z: bounds.minZ },
+      { x: bounds.maxX, z: bounds.maxZ },
+    ];
+    for (const corner of corners) {
+      const candidate = clampToTerrain(terrain, { ...corner, y: current.y });
+      if (
+        distanceSq2(candidate, current) < 1 ||
+        !movementPathClear(terrain, current, candidate, padding)
+      ) {
+        continue;
+      }
+      const score = distanceSq2(candidate, target) + distanceSq2(candidate, current) * 0.05;
+      if (score < bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+  }
+  return best;
+};
+
+const moveTowardOpen = (
+  terrain: RuntimeTerrain,
+  current: Vec3,
+  target: Vec3,
+  maxDistance: number,
+): Vec3 => {
+  const directDistance = distance2(current, target);
+  const step = Math.min(maxDistance, directDistance);
+  const waypoint = cornerWaypointAroundBlocker(terrain, current, target);
+  if (waypoint) {
+    return moveDirectionalOpen(
+      terrain,
+      current,
+      waypoint.x - current.x,
+      waypoint.z - current.z,
+      step,
+      (candidate) => distanceSq2(candidate, waypoint) + distanceSq2(candidate, target) * 0.1,
+    );
+  }
+  return moveDirectionalOpen(
+    terrain,
+    current,
+    target.x - current.x,
+    target.z - current.z,
+    step,
+    (candidate) => distanceSq2(candidate, target),
+  );
+};
+
+const moveAwayOpen = (
+  terrain: RuntimeTerrain,
+  current: Vec3,
+  threat: Vec3,
+  maxDistance: number,
+): Vec3 => {
+  return moveDirectionalOpen(
+    terrain,
+    current,
+    current.x - threat.x,
+    current.z - threat.z,
+    maxDistance,
+    (candidate) => -distanceSq2(candidate, threat),
+  );
+};
+
 const instantiateArmy = (
   setup: NormalizedBattleSetup,
   registry: ContentRegistry,
@@ -318,7 +537,7 @@ const instantiateArmy = (
   let currentIndex = unitStartIndex;
   sortedSquads.forEach((squad, squadOrdinal) => {
     const definition = registry.unitMap.get(squad.unitTypeId)!;
-    const loadout = registry.loadoutMap.get(squad.loadoutId)!;
+    const loadout = resolveRuntimeLoadout(registry.loadoutMap.get(squad.loadoutId)!, squad);
     const formation = registry.formationMap.get(squad.formationId)!;
     const aiProfile = registry.aiProfileMap.get(definition.aiProfile)!;
     const squadRuntime: SquadRuntime = {
@@ -336,7 +555,11 @@ const instantiateArmy = (
       const offset = formationOffset(index, squad.count, formation, directionToEnemy);
       const x = baseX + offset.x;
       const z = baseZ + offset.z;
-      const y = terrainHeightAt(terrain.definition, x, z);
+      const position = findOpenPosition(terrain, {
+        x,
+        y: terrainHeightAt(terrain.definition, x, z),
+        z,
+      });
       const weaponRuntimes = loadout.weapons.map((weaponId) =>
         buildWeaponRuntime(registry.weaponMap.get(weaponId)!, loadout),
       );
@@ -365,7 +588,7 @@ const instantiateArmy = (
         armyId,
         squadId: squadRuntime.id,
         unitTypeId: definition.id,
-        position: quantizeVec3({ x, y, z }),
+        position,
         rotationY: armyId === "A" ? Math.PI / 2 : -Math.PI / 2,
         velocity: { x: 0, y: 0, z: 0 },
         healthState: "healthy",
@@ -398,6 +621,7 @@ const instantiateArmy = (
         armorBoost,
         initialHealth: definition.baseHealth,
         squadInitialCount: squad.count,
+        rampageAlerted: false,
       });
       currentIndex += 1;
     }
@@ -451,7 +675,7 @@ const canUseWeapon = (runtime: WeaponRuntime, distance: number, time: number): b
   if (weapon.meleeReach > 0 && distance <= weapon.meleeReach + 0.25) {
     return true;
   }
-  return distance <= weapon.rangeMax && weapon.rangeMax > 0;
+  return distance <= weapon.rangeMax && weapon.rangeMax > 0 && weapon.magazineSize > 0;
 };
 
 const hasUsableRangedWeapon = (unit: SimUnit): boolean =>
@@ -505,10 +729,10 @@ const targetScore = (
     score -= 900;
   }
   if (profile.targetPriority === "threat" && hasUsableRangedWeapon(candidate)) {
-    score -= 1200;
+    score -= 600 + unit.definition.awareness * 9;
   }
   if (profile.targetPriority === "cluster") {
-    score -= candidate.definition.size * 160;
+    score -= candidate.definition.size * (110 + unit.definition.awareness);
   }
   if (profile.targetPriority === "isolated") {
     score -= candidate.isInFormation ? 0 : 1400;
@@ -535,7 +759,6 @@ const findTarget = (
       continue;
     }
     if (
-      distanceSquared > 40 * 40 &&
       hasUsableRangedWeapon(unit) &&
       !hasLineOfSight(terrain, unit.position, candidate.position)
     ) {
@@ -548,6 +771,26 @@ const findTarget = (
     ) {
       best = candidate;
       bestScore = score;
+    }
+  }
+  return best;
+};
+
+const findNearestAliveEnemy = (unit: SimUnit, units: SimUnit[]): SimUnit | undefined => {
+  let best: SimUnit | undefined;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of units) {
+    if (candidate.armyId === unit.armyId || !isAlive(candidate)) {
+      continue;
+    }
+    const distanceSquared = distanceSq2(unit.position, candidate.position);
+    if (
+      distanceSquared < bestDistance ||
+      (distanceSquared === bestDistance &&
+        candidate.index < (best?.index ?? Number.POSITIVE_INFINITY))
+    ) {
+      best = candidate;
+      bestDistance = distanceSquared;
     }
   }
   return best;
@@ -584,11 +827,47 @@ const applyMoraleLoss = (
   if (hasNoMorale(unit) || unit.healthState === "dead" || unit.healthState === "downed") {
     return;
   }
-  unit.morale = quantize(clamp(unit.morale - amount, 0, 100), 0.01);
+  const styleModifier =
+    unit.aiProfile.moraleStyle === "fearless"
+      ? 0.28
+      : unit.aiProfile.moraleStyle === "disciplined"
+        ? 0.72
+        : unit.aiProfile.moraleStyle === "animal"
+          ? 1.08
+          : 1;
+  const resistanceModifier = clamp(1 - unit.definition.suppressionResistance / 185, 0.32, 1);
+  const formationModifier = unit.isInFormation ? 1 / unit.formation.moraleModifier : 1;
+  const adjustedAmount = amount * styleModifier * resistanceModifier * formationModifier;
+  const routeThreshold = unit.aiProfile.moraleStyle === "fearless" ? 8 : 18;
+  unit.morale = quantize(clamp(unit.morale - adjustedAmount, 0, 100), 0.01);
   if (unit.morale < 42 && unit.moraleState === "steady") {
     unit.moraleState = "shaken";
   }
-  if (unit.morale <= 18 && unit.moraleState !== "routing") {
+  if (
+    unit.morale <= routeThreshold &&
+    unit.definition.traits.includes("rampage") &&
+    unit.moraleState !== "routing"
+  ) {
+    unit.morale = Math.max(unit.morale, routeThreshold + 6);
+    unit.moraleState = "shaken";
+    unit.currentAction = "charging";
+    unit.actionLockUntil = Math.max(unit.actionLockUntil, time + 8);
+    if (!unit.rampageAlerted) {
+      unit.rampageAlerted = true;
+      events.push({
+        time,
+        tick: Math.round(time / TICK_SECONDS),
+        type: "major_alert",
+        actorUnitId: unit.id,
+        squadId: unit.squadId,
+        armyId: unit.armyId,
+        position: unit.position,
+        message: `${unit.definition.displayName} rampaged instead of routing.`,
+      });
+    }
+    return;
+  }
+  if (unit.morale <= routeThreshold && unit.moraleState !== "routing") {
     unit.moraleState = "routing";
     unit.currentAction = "routing";
     const event: BattleEvent = {
@@ -664,10 +943,30 @@ const setDead = (
   });
 };
 
+const formationDamageMultiplier = (
+  target: SimUnit,
+  cause: DamageCause,
+  actor?: SimUnit,
+): number => {
+  if (!target.isInFormation) {
+    return 1;
+  }
+  let multiplier = cause === "explosion" ? target.formation.explosiveVulnerabilityModifier : 1;
+  if (actor) {
+    const dx = Math.abs(actor.position.x - target.position.x);
+    const dz = Math.abs(actor.position.z - target.position.z);
+    if (dz > dx * 0.85) {
+      multiplier *= target.formation.flankVulnerabilityModifier;
+    }
+  }
+  return multiplier;
+};
+
 const applyDamage = (
   target: SimUnit,
   rawDamage: number,
   cause: DamageCause,
+  penetration: number,
   time: number,
   events: BattleEvent[],
   metrics: SimulationMetrics,
@@ -677,23 +976,28 @@ const applyDamage = (
   if (!isAlive(target)) {
     return;
   }
+  const adjustedRawDamage = rawDamage * formationDamageMultiplier(target, cause, actor);
   const armor = armorForCause(target, cause);
-  const reduction = clamp((armor - rawDamage * 0.24) / 135, 0, 0.72);
+  const effectiveArmor = armor * clamp(1 - penetration / 140, 0.25, 1);
+  const reduction = clamp((effectiveArmor - adjustedRawDamage * 0.24) / 135, 0, 0.72);
   const coverReduction =
     cause === "rifle_fire" || cause === "explosion" ? target.coverQuality * 0.44 : 0;
   const formationReduction = target.isInFormation
     ? (target.formation.frontDefenseModifier - 1) * 0.22
     : 0;
-  const prevented = rawDamage * clamp(reduction + coverReduction + formationReduction, 0, 0.82);
+  const prevented =
+    adjustedRawDamage * clamp(reduction + coverReduction + formationReduction, 0, 0.82);
   metrics.preventedDamage[target.armyId] += prevented;
   const damage = quantize(
-    Math.max(1, rawDamage - prevented) * (0.86 + rng.nextFloat() * 0.28),
+    Math.max(1, adjustedRawDamage - prevented) * (0.86 + rng.nextFloat() * 0.28),
     0.01,
   );
   metrics.damageByCause[cause] = quantize(metrics.damageByCause[cause] + damage, 0.01);
   target.health = quantize(clamp(target.health - damage, -100, target.initialHealth), 0.01);
   target.lastDamageTime = time;
-  target.suppression = clamp(target.suppression + damage * 0.28, 0, 100);
+  const suppressionTaken =
+    damage * 0.28 * clamp(1 - target.definition.suppressionResistance / 180, 0.32, 1);
+  target.suppression = clamp(target.suppression + suppressionTaken, 0, 100);
 
   if (damage > 14 && rng.chance(clamp(damage / 130, 0.08, 0.8))) {
     const location = pickWoundLocation(rng);
@@ -828,9 +1132,10 @@ const hitChance = (
     attacker.healthState === "healthy" ? 1 : attacker.healthState === "wounded" ? 0.82 : 0.62;
   const suppressionModifier = clamp(1 - attacker.suppression / 150, 0.35, 1);
   const coverModifier = clamp(1 - target.coverQuality * 0.55, 0.32, 1);
+  const visibilityRangeWeight = clamp(distance / Math.max(1, weapon.rangeMax), 0.2, 1);
   const visibilityModifier =
     weapon.rangeMax > 3
-      ? terrain.definition.visibilityModifier
+      ? 1 - (1 - terrain.definition.visibilityModifier) * visibilityRangeWeight
       : clamp(0.9 + terrain.definition.visibilityModifier * 0.1, 0.8, 1);
   const targetMovementModifier =
     target.currentAction === "routing" ||
@@ -864,6 +1169,7 @@ const consumeShot = (
   attacker: SimUnit,
   metrics: SimulationMetrics,
   time: number,
+  events: BattleEvent[],
 ): void => {
   const weapon = runtime.weapon;
   runtime.cooldownUntil = quantize(
@@ -877,6 +1183,27 @@ const consumeShot = (
   }
   runtime.shotsFired += 1;
   getAmmoMetric(metrics, attacker.armyId, weapon.id).shotsFired += 1;
+  if (
+    weapon.magazineSize > 0 &&
+    !runtime.ammoLowEmitted &&
+    runtime.ammoRemaining <= Math.max(0, weapon.magazineSize)
+  ) {
+    runtime.ammoLowEmitted = true;
+    events.push({
+      time,
+      tick: Math.round(time / TICK_SECONDS),
+      type: "ammo_low",
+      actorUnitId: attacker.id,
+      armyId: attacker.armyId,
+      squadId: attacker.squadId,
+      position: attacker.position,
+      weaponId: weapon.id,
+      message:
+        runtime.ammoRemaining === 0
+          ? `${attacker.definition.displayName} exhausted ${weapon.displayName}.`
+          : `${attacker.definition.displayName} is low on ${weapon.displayName} ammunition.`,
+    });
+  }
 };
 
 const alliesInsideBlast = (
@@ -909,7 +1236,7 @@ const fireExplosive = (
     attacker.currentAction = "firing";
     return false;
   }
-  consumeShot(runtime, attacker, metrics, time);
+  consumeShot(runtime, attacker, metrics, time, events);
   runtime.explosivesUsed += 1;
   getAmmoMetric(metrics, attacker.armyId, weapon.id).explosivesUsed += 1;
   attacker.currentWeaponId = weapon.id;
@@ -946,7 +1273,17 @@ const fireExplosive = (
     if (distance <= weapon.blastRadius) {
       const beforeDead = unit.healthState === "dead";
       const falloff = clamp(1 - distance / (weapon.blastRadius * 1.2), 0.18, 1);
-      applyDamage(unit, weapon.damage * falloff, "explosion", time, events, metrics, rng, attacker);
+      applyDamage(
+        unit,
+        weapon.damage * falloff,
+        "explosion",
+        weapon.penetration,
+        time,
+        events,
+        metrics,
+        rng,
+        attacker,
+      );
       unit.suppression = clamp(unit.suppression + weapon.suppression * falloff, 0, 100);
       metrics.suppressionApplied[attacker.armyId] += weapon.suppression * falloff;
       if (unit.armyId === attacker.armyId && !beforeDead && unit.healthState === "dead") {
@@ -974,7 +1311,7 @@ const fireWeapon = (
   if (weapon.isExplosive) {
     return fireExplosive(attacker, target, runtime, units, time, events, metrics, rngs.combat);
   }
-  consumeShot(runtime, attacker, metrics, time);
+  consumeShot(runtime, attacker, metrics, time, events);
   const actionBeforeAttack = attacker.currentAction;
   attacker.currentWeaponId = weapon.id;
   attacker.currentAction =
@@ -1045,9 +1382,26 @@ const fireWeapon = (
       damageCause: weapon.damageCause,
       message: `${weapon.displayName} hit ${target.definition.displayName}.`,
     });
-    applyDamage(target, damage, weapon.damageCause, time, events, metrics, rngs.wounds, attacker);
+    applyDamage(
+      target,
+      damage,
+      weapon.damageCause,
+      weapon.penetration,
+      time,
+      events,
+      metrics,
+      rngs.wounds,
+      attacker,
+    );
     metrics.suppressionApplied[attacker.armyId] += weapon.suppression;
-    target.suppression = clamp(target.suppression + weapon.suppression * 0.32, 0, 100);
+    target.suppression = clamp(
+      target.suppression +
+        weapon.suppression *
+          0.32 *
+          clamp(1 - target.definition.suppressionResistance / 180, 0.32, 1),
+      0,
+      100,
+    );
     if (attacker.definition.fear + attacker.fearBoost > 30 && distance < 18) {
       metrics.fearEvents += 1;
       moraleShockNearby(
@@ -1109,6 +1463,24 @@ const movementSpeed = (unit: SimUnit, terrain: RuntimeTerrain): number => {
   );
 };
 
+const preferredEngagementRange = (unit: SimUnit): number => {
+  const ranged = unit.weaponRuntimes
+    .filter(
+      (runtime) =>
+        runtime.weapon.rangeMax > 2 && runtime.weapon.magazineSize > 0 && runtime.ammoRemaining > 0,
+    )
+    .sort((a, b) => b.weapon.rangeEffective - a.weapon.rangeEffective)[0];
+  if (!ranged) {
+    return 1.4;
+  }
+  const aggressionCloseFactor = clamp(0.9 - unit.aiProfile.aggression * 0.22, 0.62, 0.9);
+  return clamp(
+    ranged.weapon.rangeEffective * aggressionCloseFactor,
+    Math.min(8, ranged.weapon.rangeMax),
+    ranged.weapon.rangeMax * 0.88,
+  );
+};
+
 const updateMovement = (
   unit: SimUnit,
   target: SimUnit,
@@ -1116,19 +1488,16 @@ const updateMovement = (
   units: SimUnit[],
   time: number,
   events: BattleEvent[],
+  options: { forceContact?: boolean } = {},
 ): void => {
   const distance = distance2(unit.position, target.position);
   const hasRanged = hasUsableRangedWeapon(unit);
-  const preferredRange = hasRanged
-    ? unit.definition.category === "modern" || unit.definition.category === "fiction"
-      ? 90
-      : 35
-    : 1.4;
+  const preferredRange = preferredEngagementRange(unit);
+  const forceContact = options.forceContact === true;
   const speed = movementSpeed(unit, terrain) * TICK_SECONDS;
-  const height = (x: number, z: number) => terrainHeightAt(terrain.definition, x, z);
   if (unit.moraleState === "routing") {
     const awayFrom = centerOfEnemies(unit, units);
-    unit.position = moveAway(unit.position, awayFrom, speed * 1.15, height);
+    unit.position = moveAwayOpen(terrain, unit.position, awayFrom, speed * 1.15);
     unit.rotationY = headingTo(awayFrom, unit.position);
     unit.currentAction = "routing";
     return;
@@ -1136,6 +1505,7 @@ const updateMovement = (
   const coverWanted =
     unit.aiProfile.coverSeeking > 0.4 &&
     hasRanged &&
+    !forceContact &&
     terrain.coverNodes.length > 0 &&
     distance < 260 &&
     target.currentAction !== "routing";
@@ -1147,9 +1517,9 @@ const updateMovement = (
       34 + unit.aiProfile.coverSeeking * 34,
     );
     if (cover && distance2(unit.position, cover.position) > 2.2) {
-      unit.position = moveToward(unit.position, cover.position, speed * 0.95, height);
+      unit.position = moveTowardOpen(terrain, unit.position, cover.position, speed * 0.95);
       unit.rotationY = headingTo(unit.position, target.position);
-      unit.coverQuality = clamp(cover.coverQuality, 0, 0.85);
+      unit.coverQuality = Math.max(0, unit.coverQuality - 0.02);
       unit.currentAction = "seeking_cover";
       return;
     }
@@ -1159,14 +1529,24 @@ const updateMovement = (
   } else {
     unit.coverQuality = Math.max(0, unit.coverQuality - 0.02);
   }
-  if (hasRanged && distance < 18 && target.definition.category !== "modern") {
-    unit.position = moveAway(unit.position, target.position, speed * 0.75, height);
+  if (
+    !forceContact &&
+    hasRanged &&
+    distance < Math.min(18, preferredRange * 0.45) &&
+    target.definition.category !== "modern"
+  ) {
+    unit.position = moveAwayOpen(terrain, unit.position, target.position, speed * 0.75);
     unit.rotationY = headingTo(unit.position, target.position);
     unit.currentAction = "repositioning";
     return;
   }
-  if (!hasRanged || distance > preferredRange || unit.definition.category === "animal") {
-    unit.position = moveToward(unit.position, target.position, speed, height);
+  if (
+    forceContact ||
+    !hasRanged ||
+    distance > preferredRange ||
+    unit.definition.category === "animal"
+  ) {
+    unit.position = moveTowardOpen(terrain, unit.position, target.position, speed);
     unit.rotationY = headingTo(unit.position, target.position);
     unit.currentAction =
       unit.definition.traits.includes("charge") ||
@@ -1187,7 +1567,7 @@ const updateMovement = (
     distance < 35 &&
     time >= unit.actionLockUntil
   ) {
-    const away = moveAway(unit.position, target.position, 24, height);
+    const away = moveAwayOpen(terrain, unit.position, target.position, 24);
     unit.position = away;
     unit.actionLockUntil = time + 8;
     unit.currentAction = "repositioning";
@@ -1211,8 +1591,14 @@ const processUnit = (
   events: BattleEvent[],
   metrics: SimulationMetrics,
   rngs: RngStreams,
+  wasCombatEffectiveAtTickStart: boolean,
 ): void => {
-  unit.suppression = quantize(clamp(unit.suppression - 2.2 * TICK_SECONDS, 0, 100), 0.01);
+  const wasDeadAtTurnStart = unit.healthState === "dead";
+  const suppressionRecovery = 2.2 * (1 + unit.definition.suppressionResistance / 140);
+  unit.suppression = quantize(
+    clamp(unit.suppression - suppressionRecovery * TICK_SECONDS, 0, 100),
+    0.01,
+  );
   if (unit.moraleState === "shaken" && unit.suppression < 12 && time - unit.lastDamageTime > 12) {
     unit.morale = clamp(unit.morale + 0.25, 0, 100);
     if (unit.morale > 52) {
@@ -1228,8 +1614,10 @@ const processUnit = (
     unit.moraleState = "shaken";
     unit.currentAction = "advancing";
   }
-  applyBleeding(unit, time, events, metrics);
-  if (!canAct(unit)) {
+  if (isAlive(unit)) {
+    applyBleeding(unit, time, events, metrics);
+  }
+  if (!wasCombatEffectiveAtTickStart && !canAct(unit)) {
     if (unit.healthState === "downed") {
       unit.currentAction = "downed";
     }
@@ -1242,11 +1630,11 @@ const processUnit = (
       unit.healthState !== "downed"
     ) {
       const threat = centerOfEnemies(unit, units);
-      unit.position = moveAway(
+      unit.position = moveAwayOpen(
+        terrain,
         unit.position,
         threat,
         movementSpeed(unit, terrain) * TICK_SECONDS,
-        (x, z) => terrainHeightAt(terrain.definition, x, z),
       );
       unit.rotationY = headingTo(threat, unit.position);
     }
@@ -1254,9 +1642,17 @@ const processUnit = (
   }
   updateReloads(unit, time, metrics);
   const target = findTarget(unit, units, terrain);
-  unit.targetUnitIndex = target?.index;
+  const contactTarget = target ?? findNearestAliveEnemy(unit, units);
+  unit.targetUnitIndex = contactTarget?.index;
   if (!target) {
-    unit.currentAction = "waiting";
+    if (contactTarget) {
+      updateMovement(unit, contactTarget, terrain, units, time, events, { forceContact: true });
+    } else {
+      unit.currentAction = "waiting";
+    }
+    if (wasDeadAtTurnStart) {
+      unit.currentAction = "dead";
+    }
     return;
   }
   const distance = distance2(unit.position, target.position);
@@ -1277,10 +1673,16 @@ const processUnit = (
       if (unit.coverQuality > 0.15 && weapon.weapon.rangeMax > 2) {
         metrics.coverFireTicks[unit.armyId] += 1;
       }
+      if (wasDeadAtTurnStart) {
+        unit.currentAction = "dead";
+      }
       return;
     }
   }
   updateMovement(unit, target, terrain, units, time, events);
+  if (wasDeadAtTurnStart) {
+    unit.currentAction = "dead";
+  }
 };
 
 const updateFormationBreaks = (
@@ -1328,11 +1730,69 @@ const updateFormationBreaks = (
   }
 };
 
+const battleProgressSignature = (units: SimUnit[]): string =>
+  units
+    .map((unit) =>
+      [
+        unit.id,
+        unit.healthState,
+        unit.moraleState === "routing" ? "routing" : "not_routing",
+        unit.bleedingState,
+        quantize(unit.position.x, 1),
+        quantize(unit.position.z, 1),
+        Object.entries(unit.ammo)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([weaponId, amount]) => `${weaponId}:${amount}`)
+          .join(","),
+      ].join(":"),
+    )
+    .join("|");
+
+const battleTacticalProgressSignature = (units: SimUnit[]): string =>
+  units
+    .map((unit) =>
+      [
+        unit.id,
+        unit.healthState,
+        unit.moraleState === "routing" ? "routing" : "not_routing",
+        unit.bleedingState,
+        Object.entries(unit.ammo)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([weaponId, amount]) => `${weaponId}:${amount}`)
+          .join(","),
+      ].join(":"),
+    )
+    .join("|");
+
+const meaningfulProgressEventCount = (events: BattleEvent[]): number =>
+  events.filter((event) => event.type !== "major_alert" && event.type !== "melee_attack").length;
+
+const closestContestingDistance = (units: SimUnit[]): number => {
+  const armyA = units.filter((unit) => unit.armyId === "A" && isCombatEffective(unit));
+  const armyB = units.filter((unit) => unit.armyId === "B" && isCombatEffective(unit));
+  if (armyA.length === 0 || armyB.length === 0) {
+    return 0;
+  }
+  let closest = Number.POSITIVE_INFINITY;
+  for (const unitA of armyA) {
+    for (const unitB of armyB) {
+      closest = Math.min(closest, distance2(unitA.position, unitB.position));
+    }
+  }
+  return quantize(closest, 0.1);
+};
+
 const evaluateOutcome = (units: SimUnit[], time: number): BattleOutcome | undefined => {
-  const effectiveA = units.some((unit) => unit.armyId === "A" && isCombatEffective(unit));
-  const effectiveB = units.some((unit) => unit.armyId === "B" && isCombatEffective(unit));
+  const effectiveA = hasCombatEffectiveArmy(units, "A");
+  const effectiveB = hasCombatEffectiveArmy(units, "B");
   if (!effectiveA && !effectiveB) {
-    return { kind: "draw", reason: `Mutual elimination at ${quantize(time, 0.1)} seconds.` };
+    const anySurvivors = units.some((unit) => unit.healthState !== "dead");
+    return {
+      kind: "draw",
+      reason: anySurvivors
+        ? `Both armies became combat-ineffective at ${quantize(time, 0.1)} seconds.`
+        : `Mutual elimination at ${quantize(time, 0.1)} seconds.`,
+    };
   }
   if (!effectiveA) {
     return { kind: "army_b_victory", reason: "Army A has no combat-effective units." };
@@ -1358,6 +1818,16 @@ const evaluateOutcome = (units: SimUnit[], time: number): BattleOutcome | undefi
     };
   }
   return undefined;
+};
+
+const normalizeTerminalActions = (units: SimUnit[]): void => {
+  for (const unit of units) {
+    if (unit.healthState === "dead") {
+      unit.currentAction = "dead";
+    } else if (unit.healthState === "downed") {
+      unit.currentAction = "downed";
+    }
+  }
 };
 
 const packSample = (units: SimUnit[], time: number) => ({
@@ -1423,24 +1893,33 @@ const buildArmyReport = (
       casualtiesByCause.rout_combat_ineffective += 1;
     }
   }
-  const ammo = [...metrics.ammo.values()]
-    .filter((metric) => metric.armyId === armyId)
-    .map((metric) => {
-      const weapon = registry.weaponMap.get(metric.weaponId)!;
-      const ammoRemaining = armyUnits.reduce(
-        (total, unit) => total + (unit.ammo[metric.weaponId] ?? 0),
-        0,
-      );
+  const metricByWeapon = new Map(
+    [...metrics.ammo.values()]
+      .filter((metric) => metric.armyId === armyId)
+      .map((metric) => [metric.weaponId, metric]),
+  );
+  const ammoWeaponIds = new Set([
+    ...metricByWeapon.keys(),
+    ...armyUnits.flatMap((unit) => Object.keys(unit.ammo)),
+  ]);
+  const ammo = [...ammoWeaponIds]
+    .map((weaponId) => registry.weaponMap.get(weaponId)!)
+    .filter((weapon) => weapon.magazineSize > 0)
+    .map((weapon) => {
+      const metric = metricByWeapon.get(weapon.id);
+      const ammoRemaining = armyUnits
+        .filter((unit) => unit.healthState !== "dead")
+        .reduce((total, unit) => total + (unit.ammo[weapon.id] ?? 0), 0);
       return {
-        weaponId: metric.weaponId,
+        weaponId: weapon.id,
         displayName: weapon.displayName,
-        shotsFired: metric.shotsFired,
-        hits: metric.hits,
-        hitRate: percent(metric.hits, metric.shotsFired),
+        shotsFired: metric?.shotsFired ?? 0,
+        hits: metric?.hits ?? 0,
+        hitRate: percent(metric?.hits ?? 0, metric?.shotsFired ?? 0),
         ammoRemaining,
-        reloads: metric.reloads,
-        explosivesUsed: metric.explosivesUsed,
-        friendlyCasualties: metric.friendlyCasualties,
+        reloads: metric?.reloads ?? 0,
+        explosivesUsed: metric?.explosivesUsed ?? 0,
+        friendlyCasualties: metric?.friendlyCasualties ?? 0,
       };
     });
   return {
@@ -1451,7 +1930,9 @@ const buildArmyReport = (
     wounded: armyUnits.filter(
       (unit) => unit.healthState === "wounded" || unit.healthState === "critically_wounded",
     ).length,
-    routed: armyUnits.filter((unit) => unit.moraleState === "routing").length,
+    routed: armyUnits.filter(
+      (unit) => unit.moraleState === "routing" && unit.healthState !== "dead",
+    ).length,
     downed: armyUnits.filter((unit) => unit.healthState === "downed").length,
     casualtiesByCause,
     ammo,
@@ -1477,15 +1958,17 @@ const buildKeyFactors = (
   }
   if (winner) {
     const rangeTicks = metrics.effectiveRangeTicks[winner];
-    const averageRange = percent(
-      metrics.effectiveRangeSum[winner],
-      Math.max(1, metrics.effectiveRangeSamples[winner]),
-    );
-    factors.push({
-      label: `Army ${winner} effective-range advantage`,
-      value: `${rangeTicks} firing ticks`,
-      evidence: `Average recorded engagement distance index was ${averageRange}.`,
-    });
+    if (rangeTicks > 0) {
+      const averageRange = quantize(
+        metrics.effectiveRangeSum[winner] / Math.max(1, metrics.effectiveRangeSamples[winner]),
+        0.1,
+      );
+      factors.push({
+        label: `Army ${winner} effective-range pressure`,
+        value: `${rangeTicks} firing ticks`,
+        evidence: `Average recorded engagement distance was ${averageRange} meters.`,
+      });
+    }
     if (metrics.coverFireTicks[winner] > 0) {
       factors.push({
         label: `Army ${winner} fire from cover`,
@@ -1495,7 +1978,8 @@ const buildKeyFactors = (
     }
     if (loser) {
       const loserRouted = units.filter(
-        (unit) => unit.armyId === loser && unit.moraleState === "routing",
+        (unit) =>
+          unit.armyId === loser && unit.moraleState === "routing" && unit.healthState !== "dead",
       ).length;
       if (loserRouted > 0) {
         factors.push({
@@ -1558,12 +2042,19 @@ const buildReport = (
     totalWounded: finalUnits.filter(
       (unit) => unit.healthState === "wounded" || unit.healthState === "critically_wounded",
     ).length,
-    totalRouted: finalUnits.filter((unit) => unit.moraleState === "routing").length,
+    totalRouted: finalUnits.filter(
+      (unit) => unit.moraleState === "routing" && unit.healthState !== "dead",
+    ).length,
     armies: { A: armyA, B: armyB },
     morale: {
       firstRout: metrics.firstRout,
-      armyCollapse: metrics.armyCollapse,
-      unitsRouted: finalUnits.filter((unit) => unit.moraleState === "routing").length,
+      armyCollapse: metrics.armyCollapse.A ?? metrics.armyCollapse.B,
+      armyCollapses: (["A", "B"] as const).flatMap((armyId) =>
+        metrics.armyCollapse[armyId] ? [metrics.armyCollapse[armyId]] : [],
+      ),
+      unitsRouted: finalUnits.filter(
+        (unit) => unit.moraleState === "routing" && unit.healthState !== "dead",
+      ).length,
       formationBreaks: metrics.formationBreaks,
       fearEvents: metrics.fearEvents,
     },
@@ -1588,16 +2079,18 @@ const updateArmyCollapse = (
   metrics: SimulationMetrics,
 ): void => {
   for (const armyId of ["A", "B"] as const) {
-    if (metrics.armyCollapse?.armyId === armyId) {
+    if (metrics.armyCollapse[armyId]) {
       continue;
     }
-    const armyUnits = units.filter((unit) => unit.armyId === armyId && unit.healthState !== "dead");
+    const armyUnits = units.filter(
+      (unit) => unit.armyId === armyId && unit.healthState !== "dead" && !hasNoMorale(unit),
+    );
     if (armyUnits.length === 0) {
       continue;
     }
     const routing = armyUnits.filter((unit) => unit.moraleState === "routing").length;
     if (routing / armyUnits.length >= 0.65) {
-      metrics.armyCollapse = { armyId, time };
+      metrics.armyCollapse[armyId] = { armyId, time };
       events.push({
         time,
         tick: Math.round(time / TICK_SECONDS),
@@ -1621,20 +2114,71 @@ export const simulateBattle = (
   const samples = [packSample(units, 0)];
   let outcome: BattleOutcome | undefined;
   let finalTick = 0;
+  let lastProgressTick = 0;
+  let lastProgressSignature = battleProgressSignature(units);
+  let lastTacticalProgressTick = 0;
+  let lastTacticalProgressSignature = battleTacticalProgressSignature(units);
+  let lastProgressEventCount = meaningfulProgressEventCount(events);
+  let bestContestingDistance = closestContestingDistance(units);
 
   for (let tick = 1; tick <= MAX_TICKS; tick += 1) {
     const time = quantize(tick * TICK_SECONDS, 0.01);
     finalTick = tick;
     const stableUnits = [...units].sort((a, b) => a.index - b.index);
+    const tickStartEffective = new Set(
+      stableUnits.filter(isCombatEffective).map((unit) => unit.id),
+    );
     for (const unit of stableUnits) {
-      processUnit(unit, stableUnits, runtimeTerrain, time, events, metrics, rngs);
+      processUnit(
+        unit,
+        stableUnits,
+        runtimeTerrain,
+        time,
+        events,
+        metrics,
+        rngs,
+        tickStartEffective.has(unit.id),
+      );
     }
     updateFormationBreaks(squads, units, time, events, metrics);
     updateArmyCollapse(units, time, events, metrics);
+    normalizeTerminalActions(units);
+    if (tick % NO_PROGRESS_CHECK_TICKS === 0) {
+      const currentProgressSignature = battleProgressSignature(units);
+      const currentTacticalProgressSignature = battleTacticalProgressSignature(units);
+      const currentContestingDistance = closestContestingDistance(units);
+      const currentProgressEventCount = meaningfulProgressEventCount(events);
+      const recordedCombatEvent = currentProgressEventCount !== lastProgressEventCount;
+      const changedCombatState = currentTacticalProgressSignature !== lastTacticalProgressSignature;
+      const moved = currentProgressSignature !== lastProgressSignature;
+      const closedDistance = currentContestingDistance < bestContestingDistance - 1;
+      if (recordedCombatEvent || changedCombatState || closedDistance || moved) {
+        lastProgressTick = tick;
+      }
+      if (recordedCombatEvent || changedCombatState || closedDistance) {
+        lastTacticalProgressTick = tick;
+        lastTacticalProgressSignature = currentTacticalProgressSignature;
+        lastProgressEventCount = currentProgressEventCount;
+        bestContestingDistance = Math.min(bestContestingDistance, currentContestingDistance);
+      }
+      lastProgressSignature = currentProgressSignature;
+    }
     if (tick % SAMPLE_TICKS === 0) {
       samples.push(packSample(units, time));
     }
     outcome = evaluateOutcome(units, time);
+    if (
+      !outcome &&
+      (tick - lastProgressTick >= NO_MEANINGFUL_PROGRESS_TICKS ||
+        tick - lastTacticalProgressTick >= NO_TACTICAL_PROGRESS_TICKS) &&
+      hasCombatEffectiveArmy(units, "A") &&
+      hasCombatEffectiveArmy(units, "B")
+    ) {
+      outcome = {
+        kind: "stalemate",
+        reason: "No meaningful battle progress; surviving armies could not establish contact.",
+      };
+    }
     if (outcome) {
       break;
     }
@@ -1677,31 +2221,8 @@ export const simulateBattle = (
   const resultHash = hashObject({
     setup,
     outcome,
-    finalUnits: finalUnits.map((unit) => ({
-      id: unit.id,
-      armyId: unit.armyId,
-      unitTypeId: unit.unitTypeId,
-      healthState: unit.healthState,
-      moraleState: unit.moraleState,
-      health: unit.health,
-      morale: unit.morale,
-      position: unit.position,
-      deathCause: unit.deathCause,
-      kills: unit.kills,
-      ammo: unit.ammo,
-    })),
-    majorEvents: events
-      .filter(
-        (event) => event.type === "major_alert" || event.type === "death" || event.type === "rout",
-      )
-      .map((event) => ({
-        time: event.time,
-        type: event.type,
-        actorUnitId: event.actorUnitId,
-        targetUnitId: event.targetUnitId,
-        armyId: event.armyId,
-        message: event.message,
-      })),
+    finalUnits,
+    timeline,
     reportTotals: {
       totalStartingUnits: reportWithoutHash.totalStartingUnits,
       totalSurvivors: reportWithoutHash.totalSurvivors,

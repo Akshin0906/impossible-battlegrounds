@@ -136,7 +136,7 @@ const normalizeArmy = (
         armyId,
         id: `${armyId}-${squadIndex + 1}-${chunkIndex + 1}`,
         normalizedId: `${armyId}-${squadIndex + 1}-${chunkIndex + 1}`,
-        sourceSquadId: squad.id,
+        sourceSquadId: `${armyId}-${squadIndex + 1}`,
         chunkIndex,
         count,
         loadoutId: loadout.id,

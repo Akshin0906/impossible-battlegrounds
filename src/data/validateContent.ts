@@ -13,6 +13,19 @@ const uniqueIds = <T extends { id: string }>(label: string, items: T[], diagnost
   }
 };
 
+const formationAllowsUnit = (
+  formation: ContentRegistry["formations"][number],
+  unit: ContentRegistry["units"][number],
+): boolean => {
+  if (formation.allowedUnitTypeIds) {
+    return formation.allowedUnitTypeIds.includes(unit.id);
+  }
+  if (formation.allowedCategories) {
+    return formation.allowedCategories.includes(unit.category);
+  }
+  return true;
+};
+
 export const validateContentRegistry = (registry: ContentRegistry): string[] => {
   const diagnostics: string[] = [];
   uniqueIds("units", registry.units, diagnostics);
@@ -40,8 +53,13 @@ export const validateContentRegistry = (registry: ContentRegistry): string[] => 
       }
     }
     for (const formationId of unit.allowedFormations) {
-      if (!registry.formationMap.has(formationId)) {
+      const formation = registry.formationMap.get(formationId);
+      if (!formation) {
         diagnostics.push(`${unit.id} references missing formation '${formationId}'`);
+      } else if (!formationAllowsUnit(formation, unit)) {
+        diagnostics.push(
+          `${unit.id} lists formation '${formationId}' but formation does not allow it`,
+        );
       }
     }
   }
@@ -57,9 +75,25 @@ export const validateContentRegistry = (registry: ContentRegistry): string[] => 
     }
   }
 
+  for (const weapon of registry.weapons) {
+    if (weapon.rangeMax > 2 && weapon.meleeReach <= 0 && weapon.magazineSize <= 0) {
+      diagnostics.push(`${weapon.id} is ranged but has nonpositive magazineSize`);
+    }
+  }
+
   for (const formation of registry.formations) {
     if (formation.spacing <= 0) {
       diagnostics.push(`${formation.id} has nonpositive spacing`);
+    }
+    for (const unitId of formation.allowedUnitTypeIds ?? []) {
+      const unit = registry.unitMap.get(unitId);
+      if (!unit) {
+        diagnostics.push(`${formation.id} references missing unit '${unitId}'`);
+        continue;
+      }
+      if (!unit.allowedFormations.includes(formation.id)) {
+        diagnostics.push(`${formation.id} allows ${unit.id} but ${unit.id} does not list it`);
+      }
     }
   }
 

@@ -10,6 +10,17 @@ import type { ContentRegistry } from "../domain/content";
 import { quantize, quantizeVec3 } from "./deterministicMath";
 import { createRng } from "./rng";
 
+export type TerrainAabb = {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+};
+
+export type TerrainPoint = Pick<Vec3, "x" | "z">;
+
+const AABB_EPSILON = 1e-9;
+
 const pushCoverForObstacle = (nodes: CoverNode[], obstacle: TerrainObstacle): void => {
   const offsets = [
     { x: obstacle.size.x / 2 + 1.4, z: 0, nx: 1, nz: 0 },
@@ -155,30 +166,145 @@ export const generateRuntimeTerrain = (
   return { definition, obstacles, coverNodes, warnings };
 };
 
-const intersectsObstacle = (a: Vec3, b: Vec3, obstacle: TerrainObstacle): boolean => {
-  const minX = obstacle.position.x - obstacle.size.x / 2;
-  const maxX = obstacle.position.x + obstacle.size.x / 2;
-  const minZ = obstacle.position.z - obstacle.size.z / 2;
-  const maxZ = obstacle.position.z + obstacle.size.z / 2;
-  const steps = 8;
-  for (let step = 1; step < steps; step += 1) {
-    const ratio = step / steps;
-    const x = a.x + (b.x - a.x) * ratio;
-    const z = a.z + (b.z - a.z) * ratio;
-    if (x >= minX && x <= maxX && z >= minZ && z <= maxZ) {
-      return true;
+export const obstacleAabb = (obstacle: TerrainObstacle, padding = 0): TerrainAabb => {
+  const halfX = Math.max(0, Math.abs(obstacle.size.x) / 2 + padding);
+  const halfZ = Math.max(0, Math.abs(obstacle.size.z) / 2 + padding);
+  return {
+    minX: obstacle.position.x - halfX,
+    maxX: obstacle.position.x + halfX,
+    minZ: obstacle.position.z - halfZ,
+    maxZ: obstacle.position.z + halfZ,
+  };
+};
+
+export const pointInAabb = (point: TerrainPoint, aabb: TerrainAabb): boolean => {
+  const minX = Math.min(aabb.minX, aabb.maxX);
+  const maxX = Math.max(aabb.minX, aabb.maxX);
+  const minZ = Math.min(aabb.minZ, aabb.maxZ);
+  const maxZ = Math.max(aabb.minZ, aabb.maxZ);
+  return (
+    point.x >= minX - AABB_EPSILON &&
+    point.x <= maxX + AABB_EPSILON &&
+    point.z >= minZ - AABB_EPSILON &&
+    point.z <= maxZ + AABB_EPSILON
+  );
+};
+
+export const segmentIntersectsAabb = (
+  a: TerrainPoint,
+  b: TerrainPoint,
+  aabb: TerrainAabb,
+): boolean => {
+  const minX = Math.min(aabb.minX, aabb.maxX);
+  const maxX = Math.max(aabb.minX, aabb.maxX);
+  const minZ = Math.min(aabb.minZ, aabb.maxZ);
+  const maxZ = Math.max(aabb.minZ, aabb.maxZ);
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  let enter = 0;
+  let exit = 1;
+
+  if (Math.abs(dx) <= AABB_EPSILON) {
+    if (a.x < minX - AABB_EPSILON || a.x > maxX + AABB_EPSILON) {
+      return false;
+    }
+  } else {
+    let axisEnter = (minX - a.x) / dx;
+    let axisExit = (maxX - a.x) / dx;
+    if (axisEnter > axisExit) {
+      [axisEnter, axisExit] = [axisExit, axisEnter];
+    }
+    enter = Math.max(enter, axisEnter);
+    exit = Math.min(exit, axisExit);
+    if (enter > exit + AABB_EPSILON) {
+      return false;
     }
   }
-  return false;
+
+  if (Math.abs(dz) <= AABB_EPSILON) {
+    if (a.z < minZ - AABB_EPSILON || a.z > maxZ + AABB_EPSILON) {
+      return false;
+    }
+  } else {
+    let axisEnter = (minZ - a.z) / dz;
+    let axisExit = (maxZ - a.z) / dz;
+    if (axisEnter > axisExit) {
+      [axisEnter, axisExit] = [axisExit, axisEnter];
+    }
+    enter = Math.max(enter, axisEnter);
+    exit = Math.min(exit, axisExit);
+    if (enter > exit + AABB_EPSILON) {
+      return false;
+    }
+  }
+
+  return exit >= -AABB_EPSILON && enter <= 1 + AABB_EPSILON;
+};
+
+export const segmentIntersectsObstacle = (
+  a: TerrainPoint,
+  b: TerrainPoint,
+  obstacle: TerrainObstacle,
+  padding = 0,
+): boolean => segmentIntersectsAabb(a, b, obstacleAabb(obstacle, padding));
+
+export const obstacleOccupiesPoint = (
+  obstacle: TerrainObstacle,
+  point: TerrainPoint,
+  padding = 0,
+): boolean => pointInAabb(point, obstacleAabb(obstacle, padding));
+
+export const lineOfSightBlockersBetween = (
+  terrain: RuntimeTerrain,
+  a: TerrainPoint,
+  b: TerrainPoint,
+): TerrainObstacle[] => {
+  return terrain.obstacles.filter(
+    (obstacle) => obstacle.blocksLineOfSight && segmentIntersectsObstacle(a, b, obstacle),
+  );
 };
 
 export const hasLineOfSight = (terrain: RuntimeTerrain, a: Vec3, b: Vec3): boolean => {
   for (const obstacle of terrain.obstacles) {
-    if (obstacle.blocksLineOfSight && intersectsObstacle(a, b, obstacle)) {
+    if (obstacle.blocksLineOfSight && segmentIntersectsObstacle(a, b, obstacle)) {
       return false;
     }
   }
   return true;
+};
+
+export const movementBlockersAt = (
+  terrain: RuntimeTerrain,
+  point: TerrainPoint,
+  padding = 0,
+): TerrainObstacle[] => {
+  return terrain.obstacles.filter(
+    (obstacle) => obstacle.blocksMovement && obstacleOccupiesPoint(obstacle, point, padding),
+  );
+};
+
+export const movementBlockersBetween = (
+  terrain: RuntimeTerrain,
+  a: TerrainPoint,
+  b: TerrainPoint,
+  padding = 0,
+): TerrainObstacle[] => {
+  return terrain.obstacles.filter(
+    (obstacle) => obstacle.blocksMovement && segmentIntersectsObstacle(a, b, obstacle, padding),
+  );
+};
+
+export const isMovementBlockedAt = (
+  terrain: RuntimeTerrain,
+  point: TerrainPoint,
+  padding = 0,
+): boolean => {
+  for (const obstacle of terrain.obstacles) {
+    if (obstacle.blocksMovement && obstacleOccupiesPoint(obstacle, point, padding)) {
+      return true;
+    }
+  }
+  return false;
 };
 
 export const nearestCover = (

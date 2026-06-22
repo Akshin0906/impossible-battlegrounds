@@ -966,12 +966,20 @@ label span {
 }
 
 .loading-panel {
+  display: grid;
+  gap: 0.9rem;
   width: min(32rem, 100%);
 }
 
 .loading-panel p {
-  margin-top: 0;
+  margin: 0;
   color: var(--muted);
+}
+
+.loading-actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 0.25rem;
 }
 
 .progress-bar {

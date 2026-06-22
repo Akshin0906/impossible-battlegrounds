@@ -88,6 +88,9 @@ type SelectMenuOption = {
 
 const SIMULATION_TIMEOUT_MS = 60_000;
 
+const developerDetailFor = (error: unknown): string =>
+  error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error);
+
 const roleLabels: Record<DeploymentRole, string> = {
   front: "Front",
   support: "Support",
@@ -811,7 +814,7 @@ const SetupScreen = ({
   );
 };
 
-const LoadingScreen = ({ loading }: { loading: LoadingState }) => {
+const LoadingScreen = ({ loading, onBack }: { loading: LoadingState; onBack: () => void }) => {
   const progressPercent = Math.round(loading.progress * 100);
   return (
     <main aria-busy="true" className="loading-screen">
@@ -830,6 +833,12 @@ const LoadingScreen = ({ loading }: { loading: LoadingState }) => {
           <div style={{ width: `${progressPercent}%` }} />
         </div>
         <span>{progressPercent}%</span>
+        <div className="loading-actions">
+          <button className="secondary" type="button" onClick={onBack}>
+            <ArrowLeft size={16} />
+            Back to setup
+          </button>
+        </div>
       </section>
     </main>
   );
@@ -1333,7 +1342,7 @@ const ReportScreen = ({
                   <strong>{army.downed}</strong>
                 </div>
               </div>
-              <h3>Casualties by cause</h3>
+              <h3>Losses by cause</h3>
               <ul className="compact-list">
                 {Object.entries(army.casualtiesByCause).map(([cause, count]) => (
                   <li key={cause}>
@@ -1359,13 +1368,13 @@ const ReportScreen = ({
           </ul>
         </article>
         <article className="panel wide">
-          <h2>Ammunition</h2>
+          <h2>Final carried ammunition</h2>
           <div className="ammo-grid">
             {(["A", "B"] as const).map((armyId) => (
               <div key={armyId}>
                 <h3>Army {armyId}</h3>
                 {result.report.armies[armyId].ammo.length === 0 ? (
-                  <p>No ranged ammunition recorded.</p>
+                  <p>No carried ammunition recorded.</p>
                 ) : (
                   <ul className="ammo-list">
                     {result.report.armies[armyId].ammo.map((entry) => (
@@ -1375,7 +1384,7 @@ const ReportScreen = ({
                           {entry.shotsFired} shots, {entry.hits} hits, {entry.hitRate}% hit rate
                         </span>
                         <span>
-                          {entry.ammoRemaining} remaining, {entry.reloads} reloads,{" "}
+                          {entry.ammoRemaining} carried by surviving units, {entry.reloads} reloads,{" "}
                           {entry.explosivesUsed} explosives, {entry.friendlyCasualties} friendly
                           casualties
                         </span>
@@ -1404,8 +1413,10 @@ const ReportScreen = ({
             </dd>
             <dt>Army collapse</dt>
             <dd>
-              {result.report.morale.armyCollapse
-                ? `Army ${result.report.morale.armyCollapse.armyId} at ${formatTime(result.report.morale.armyCollapse.time)}`
+              {result.report.morale.armyCollapses.length > 0
+                ? result.report.morale.armyCollapses
+                    .map((collapse) => `Army ${collapse.armyId} at ${formatTime(collapse.time)}`)
+                    .join(", ")
                 : "None"}
             </dd>
           </dl>
@@ -1487,13 +1498,28 @@ const BattleApp = () => {
       setLoading({ step: "Preparing terrain...", progress: 0.04 });
       setScreen("loading");
 
-      const worker = new Worker(new URL("../workers/simulationWorker.ts", import.meta.url), {
-        type: "module",
-      });
-      workerRef.current = worker;
       const requestId = crypto.randomUUID();
       activeRequestRef.current = requestId;
       const startedAt = performance.now();
+      let worker: Worker;
+      try {
+        worker = new Worker(new URL("../workers/simulationWorker.ts", import.meta.url), {
+          type: "module",
+        });
+      } catch (error) {
+        activeRequestRef.current = null;
+        setSimulationError({
+          title: "Worker could not start",
+          message: "The browser could not construct the simulation worker.",
+          diagnostics: [
+            "No simulation request was sent. Try reloading the page, then run the battle again.",
+          ],
+          developerDetail: developerDetailFor(error),
+        });
+        setScreen("error");
+        return;
+      }
+      workerRef.current = worker;
 
       const isActiveWorker = () =>
         activeRequestRef.current === requestId && workerRef.current === worker;
@@ -1546,7 +1572,12 @@ const BattleApp = () => {
 
       worker.onmessage = (event: MessageEvent<SimulationWorkerResponse>) => {
         const response = event.data;
-        if (!isActiveWorker() || response.requestId !== requestId) {
+        const acceptsUnknownIncompatibleRequest =
+          response.type === "incompatible_request" && response.requestId === "unknown-request";
+        if (
+          !isActiveWorker() ||
+          (response.requestId !== requestId && !acceptsUnknownIncompatibleRequest)
+        ) {
           return;
         }
         if (response.protocolVersion !== WORKER_PROTOCOL_VERSION) {
@@ -1588,6 +1619,15 @@ const BattleApp = () => {
             title: "Battle setup is invalid",
             message: response.message,
             diagnostics: response.diagnostics,
+          });
+          return;
+        }
+        if (response.type === "incompatible_request") {
+          failSimulation({
+            title: "Worker request was rejected",
+            message: response.message,
+            diagnostics: ["The app and worker did not agree on the simulation request contract."],
+            developerDetail: response.developerDetail,
           });
           return;
         }
@@ -1635,7 +1675,7 @@ const BattleApp = () => {
     );
   }
   if (screen === "loading") {
-    return <LoadingScreen loading={loading} />;
+    return <LoadingScreen loading={loading} onBack={backToSetup} />;
   }
   if (screen === "error" && simulationError) {
     return (

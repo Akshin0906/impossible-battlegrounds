@@ -183,15 +183,46 @@ describe("content validation diagnostics", () => {
 });
 
 describe("simulation worker failure handling", () => {
-  it("ignores messages for incompatible protocol versions", () => {
+  it("posts explicit failure for incompatible protocol versions", () => {
     const responses: SimulationWorkerResponse[] = [];
     const handled = handleSimulationWorkerRequest(
       { ...makeRequest(), protocolVersion: 999 as typeof WORKER_PROTOCOL_VERSION },
       (response) => responses.push(response),
     );
 
-    expect(handled).toBe(false);
-    expect(responses).toEqual([]);
+    expect(handled).toBe(true);
+    expect(responses).toEqual([
+      expect.objectContaining({
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        type: "incompatible_request",
+        requestId: "request-1",
+        message: "The simulation worker rejected an incompatible request.",
+        developerDetail: "Expected protocol 1, received 999.",
+      }),
+    ]);
+  });
+
+  it("posts explicit failure for unsupported request types", () => {
+    const responses: SimulationWorkerResponse[] = [];
+    const handled = handleSimulationWorkerRequest(
+      {
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        type: "cancel_simulation",
+        requestId: "request-2",
+      },
+      (response) => responses.push(response),
+    );
+
+    expect(handled).toBe(true);
+    expect(responses).toEqual([
+      expect.objectContaining({
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        type: "incompatible_request",
+        requestId: "request-2",
+        message: "The simulation worker rejected an incompatible request.",
+        developerDetail: "Expected request type start_simulation, received cancel_simulation.",
+      }),
+    ]);
   });
 
   it("posts validation diagnostics without running a simulation", () => {

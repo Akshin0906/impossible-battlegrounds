@@ -36,9 +36,9 @@ const REQUIRED_UNIT_IDS = [
 const REQUIRED_TERRAIN_IDS = ["open_field", "forest", "urban_blocks", "rocky_hills"] as const;
 
 const EXPECTED_RESULT_HASHES = {
-  infantryVsWolvesAlpha: "27c872fc",
-  infantryVsWolvesBeta: "a7301369",
-  androidVsBears: "806ff47f",
+  infantryVsWolvesAlpha: "3edb9f47",
+  infantryVsWolvesBeta: "794b17f3",
+  androidVsBears: "756782dd",
 } as const;
 
 const infantryVsWolvesDraft = (
@@ -148,7 +148,8 @@ const countUnits = (units: UnitFinalState[]) => ({
   survivors: units.filter((unit) => unit.healthState !== "dead").length,
   dead: units.filter((unit) => unit.healthState === "dead").length,
   wounded: units.filter(isWounded).length,
-  routed: units.filter((unit) => unit.moraleState === "routing").length,
+  routed: units.filter((unit) => unit.moraleState === "routing" && unit.healthState !== "dead")
+    .length,
   downed: units.filter((unit) => unit.healthState === "downed").length,
 });
 

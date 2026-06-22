@@ -357,6 +357,7 @@ export type ArmyReport = {
 export type MoraleReport = {
   firstRout?: { squadId: string; time: number };
   armyCollapse?: { armyId: ArmyId; time: number };
+  armyCollapses: Array<{ armyId: ArmyId; time: number }>;
   unitsRouted: number;
   formationBreaks: number;
   fearEvents: number;

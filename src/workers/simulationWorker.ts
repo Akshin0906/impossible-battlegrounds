@@ -39,13 +39,60 @@ const progress = (
   emit(response);
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const requestIdFor = (request: unknown): string => {
+  if (!isRecord(request) || typeof request.requestId !== "string") {
+    return "unknown-request";
+  }
+  return request.requestId;
+};
+
+const describeIncompatibleRequest = (request: unknown): string => {
+  if (!isRecord(request)) {
+    return "Worker request was not an object.";
+  }
+  if (request.protocolVersion !== WORKER_PROTOCOL_VERSION) {
+    return `Expected protocol ${WORKER_PROTOCOL_VERSION}, received ${String(
+      request.protocolVersion,
+    )}.`;
+  }
+  if (request.type !== "start_simulation") {
+    return `Expected request type start_simulation, received ${String(request.type)}.`;
+  }
+  if (typeof request.requestId !== "string") {
+    return "Worker request did not include a string requestId.";
+  }
+  return "Worker request was missing simulation setup data.";
+};
+
+const isSimulationWorkerRequest = (request: unknown): request is SimulationWorkerRequest =>
+  isRecord(request) &&
+  request.protocolVersion === WORKER_PROTOCOL_VERSION &&
+  request.type === "start_simulation" &&
+  typeof request.requestId === "string" &&
+  "setup" in request;
+
+const incompatibleRequest = (request: unknown, emit: SimulationWorkerPostMessage): void => {
+  const response: SimulationWorkerResponse = {
+    protocolVersion: WORKER_PROTOCOL_VERSION,
+    type: "incompatible_request",
+    requestId: requestIdFor(request),
+    message: "The simulation worker rejected an incompatible request.",
+    developerDetail: describeIncompatibleRequest(request),
+  };
+  emit(response);
+};
+
 export const handleSimulationWorkerRequest = (
-  request: SimulationWorkerRequest,
+  request: unknown,
   emit: SimulationWorkerPostMessage,
   dependencies: SimulationWorkerDependencies = defaultDependencies,
 ): boolean => {
-  if (request.protocolVersion !== WORKER_PROTOCOL_VERSION || request.type !== "start_simulation") {
-    return false;
+  if (!isSimulationWorkerRequest(request)) {
+    incompatibleRequest(request, emit);
+    return true;
   }
   try {
     progress(emit, request.requestId, "Preparing terrain...", 0.08);
@@ -93,7 +140,7 @@ export const handleSimulationWorkerRequest = (
 };
 
 if (typeof self !== "undefined") {
-  self.onmessage = (event: MessageEvent<SimulationWorkerRequest>) => {
+  self.onmessage = (event: MessageEvent<unknown>) => {
     handleSimulationWorkerRequest(event.data, (response) => self.postMessage(response));
   };
 }

@@ -32,6 +32,13 @@ export type SimulationWorkerResponse =
     }
   | {
       protocolVersion: typeof WORKER_PROTOCOL_VERSION;
+      type: "incompatible_request";
+      requestId: string;
+      message: string;
+      developerDetail: string;
+    }
+  | {
+      protocolVersion: typeof WORKER_PROTOCOL_VERSION;
       type: "runtime_failure";
       requestId: string;
       message: string;

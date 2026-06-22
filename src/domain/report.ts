@@ -1,7 +1,7 @@
 import type { BattleReport, DamageCause } from "./battle";
 
 export const DAMAGE_CAUSE_LABEL: Record<DamageCause, string> = {
-  rifle_fire: "Rifle fire",
+  rifle_fire: "Projectile fire",
   melee: "Melee",
   explosion: "Explosion",
   trampling: "Trampling",
