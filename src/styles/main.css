@@ -1117,7 +1117,7 @@ label span {
 }
 
 .inspection-panel dl,
-.report-grid dl {
+.report-definition-list {
   display: grid;
   grid-template-columns: minmax(7rem, 0.6fr) minmax(0, 1fr);
   gap: 0.45rem 0.75rem;
@@ -1185,7 +1185,13 @@ dd {
 
 .report-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 1rem;
+  align-items: start;
+  gap: 1.1rem;
+  margin-top: 1.1rem;
+}
+
+.report-grid .panel {
+  min-width: 0;
 }
 
 .wide {
@@ -1210,6 +1216,34 @@ dd {
 .report-hero p {
   margin: 0.45rem 0 0;
   color: #c6d3c2;
+}
+
+.report-definition-list {
+  gap: 0;
+  margin: 0;
+}
+
+.report-definition-list dt,
+.report-definition-list dd {
+  border-bottom: 1px solid rgba(238, 245, 235, 0.08);
+  padding: 0.45rem 0;
+}
+
+.report-definition-list dt {
+  min-width: 0;
+  color: #b5c3b0;
+  font-size: 0.82rem;
+}
+
+.report-definition-list dd {
+  color: #eef7eb;
+  font-weight: 750;
+}
+
+.mono-value {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  letter-spacing: 0;
 }
 
 .stat-grid {
@@ -1250,6 +1284,27 @@ dd {
   font-size: 1.15rem;
 }
 
+.army-report {
+  position: relative;
+  overflow: hidden;
+}
+
+.army-report::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  content: "";
+  background: linear-gradient(90deg, var(--army-a), transparent);
+}
+
+.army-report.army-b::before {
+  background: linear-gradient(90deg, var(--army-b), transparent);
+}
+
+.army-report h2 {
+  padding-top: 0.1rem;
+}
+
 .compact-list,
 .factor-list {
   display: grid;
@@ -1257,6 +1312,10 @@ dd {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.factor-list {
+  gap: 0.75rem;
 }
 
 .compact-list li {
@@ -1267,9 +1326,14 @@ dd {
 
 .factor-list li {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.3rem;
   border-left: 3px solid var(--accent);
-  padding-left: 0.7rem;
+  padding-left: 0.8rem;
+}
+
+.factor-list strong {
+  color: #f3fff0;
+  line-height: 1.25;
 }
 
 .factor-list span,
@@ -1281,12 +1345,21 @@ dd {
 .ammo-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 1.25rem;
+}
+
+.ammo-column {
+  min-width: 0;
+}
+
+.ammo-column h3 {
+  margin-bottom: 0.9rem;
+  color: #eef7eb;
 }
 
 .ammo-list {
   display: grid;
-  gap: 0.7rem;
+  gap: 0.9rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1294,13 +1367,79 @@ dd {
 
 .ammo-list li {
   display: grid;
-  gap: 0.25rem;
-  border-left: 3px solid var(--army-b);
-  padding-left: 0.7rem;
+  gap: 0.5rem;
+  border-bottom: 1px solid rgba(238, 245, 235, 0.08);
+  border-left: 3px solid var(--army-a);
+  padding: 0 0 0.9rem 0.8rem;
+}
+
+.ammo-column.army-b .ammo-list li {
+  border-left-color: var(--army-b);
+}
+
+.ammo-list strong {
+  color: #f5fff2;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.report-grid .ammo-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem 0.75rem;
+  margin: 0;
+}
+
+.ammo-stat-grid div {
+  min-width: 0;
+}
+
+.ammo-stat-grid dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.ammo-stat-grid dd {
+  margin-top: 0.15rem;
+  color: #eef7eb;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.ammo-stat-grid .stat-highlight dd {
+  color: var(--accent);
+}
+
+.report-grid .metric-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.45rem;
+  margin: 0;
 }
 
 .metric-row {
-  display: contents;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 1px solid rgba(238, 245, 235, 0.08);
+  padding-bottom: 0.45rem;
+}
+
+.metric-row dt {
+  color: #b5c3b0;
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.metric-row dd {
+  color: #f4fff1;
+  font-weight: 850;
+  text-align: right;
 }
 
 .error-screen {
@@ -1505,6 +1644,32 @@ dd {
 
   .stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .report-definition-list,
+  .metric-row {
+    grid-template-columns: 1fr;
+  }
+
+  .report-definition-list dt {
+    border-bottom: 0;
+    padding-bottom: 0.1rem;
+  }
+
+  .report-definition-list dd {
+    padding-top: 0;
+  }
+
+  .report-grid .ammo-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-row {
+    gap: 0.2rem;
+  }
+
+  .metric-row dd {
+    text-align: left;
   }
 }
 

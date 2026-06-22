@@ -36,6 +36,7 @@ import {
   type RefObject,
 } from "react";
 import type {
+  AmmoWeaponReport,
   ArmyDraft,
   ArmyId,
   BattleResult,
@@ -96,6 +97,54 @@ const roleLabels: Record<DeploymentRole, string> = {
   support: "Support",
   flank: "Flank",
 };
+
+const reportNumberFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+});
+
+const reportPercentFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+});
+
+const metricLabels: Record<string, string> = {
+  firstMeleeContactTime: "First melee contact",
+  casualtiesBeforeMelee: "Casualties before melee",
+  armyAEffectiveRangeTicks: "Army A effective range",
+  armyBEffectiveRangeTicks: "Army B effective range",
+  armyACoverFireTicks: "Army A cover fire",
+  armyBCoverFireTicks: "Army B cover fire",
+  armyAPreventedDamage: "Army A prevented damage",
+  armyBPreventedDamage: "Army B prevented damage",
+};
+
+const formatReportNumber = (value: number): string => reportNumberFormatter.format(value);
+
+const formatHitRate = (value: number): string => `${reportPercentFormatter.format(value)}%`;
+
+const formatMetricLabel = (key: string): string =>
+  metricLabels[key] ?? key.replace(/([A-Z])/g, " $1").trim();
+
+const formatMetricValue = (key: string, value: number | string): string => {
+  if (key === "firstMeleeContactTime") {
+    return typeof value === "number" ? formatTime(value) : "None";
+  }
+
+  if (typeof value === "number") {
+    return formatReportNumber(value);
+  }
+
+  return value === "none" ? "None" : value;
+};
+
+const ammoStatsFor = (entry: AmmoWeaponReport) => [
+  { label: "Shots", value: formatReportNumber(entry.shotsFired) },
+  { label: "Hits", value: formatReportNumber(entry.hits) },
+  { label: "Hit rate", value: formatHitRate(entry.hitRate), tone: "highlight" },
+  { label: "Carried", value: formatReportNumber(entry.ammoRemaining) },
+  { label: "Reloads", value: formatReportNumber(entry.reloads) },
+  { label: "Explosives", value: formatReportNumber(entry.explosivesUsed) },
+  { label: "Friendly casualties", value: formatReportNumber(entry.friendlyCasualties) },
+];
 
 const distanceOptions = [10, 25, 50, 100, 200, 300, 500];
 
@@ -1294,7 +1343,7 @@ const ReportScreen = ({
         </article>
         <article className="panel">
           <h2>Run details</h2>
-          <dl>
+          <dl className="report-definition-list">
             <dt>Duration</dt>
             <dd>{formatTime(result.report.duration)}</dd>
             <dt>Terrain</dt>
@@ -1302,19 +1351,19 @@ const ReportScreen = ({
             <dt>Starting distance</dt>
             <dd>{result.report.startingDistance} meters</dd>
             <dt>Seed</dt>
-            <dd>{result.report.seed}</dd>
+            <dd className="mono-value">{result.report.seed}</dd>
             <dt>Result hash</dt>
-            <dd>{result.resultHash}</dd>
+            <dd className="mono-value">{result.resultHash}</dd>
             <dt>Simulation version</dt>
-            <dd>{result.report.simulationVersion}</dd>
+            <dd className="mono-value">{result.report.simulationVersion}</dd>
             <dt>Content version</dt>
-            <dd>{result.report.contentVersion}</dd>
+            <dd className="mono-value">{result.report.contentVersion}</dd>
           </dl>
         </article>
         {(["A", "B"] as const).map((armyId) => {
           const army = result.report.armies[armyId];
           return (
-            <article className="panel army-report" key={armyId}>
+            <article className={`panel army-report army-${armyId.toLowerCase()}`} key={armyId}>
               <h2>Army {armyId}</h2>
               <div className="stat-grid compact-stats">
                 <div>
@@ -1371,7 +1420,7 @@ const ReportScreen = ({
           <h2>Final carried ammunition</h2>
           <div className="ammo-grid">
             {(["A", "B"] as const).map((armyId) => (
-              <div key={armyId}>
+              <div className={`ammo-column army-${armyId.toLowerCase()}`} key={armyId}>
                 <h3>Army {armyId}</h3>
                 {result.report.armies[armyId].ammo.length === 0 ? (
                   <p>No carried ammunition recorded.</p>
@@ -1380,14 +1429,17 @@ const ReportScreen = ({
                     {result.report.armies[armyId].ammo.map((entry) => (
                       <li key={entry.weaponId}>
                         <strong>{entry.displayName}</strong>
-                        <span>
-                          {entry.shotsFired} shots, {entry.hits} hits, {entry.hitRate}% hit rate
-                        </span>
-                        <span>
-                          {entry.ammoRemaining} carried by surviving units, {entry.reloads} reloads,{" "}
-                          {entry.explosivesUsed} explosives, {entry.friendlyCasualties} friendly
-                          casualties
-                        </span>
+                        <dl className="ammo-stat-grid">
+                          {ammoStatsFor(entry).map((stat) => (
+                            <div
+                              className={stat.tone ? `stat-${stat.tone}` : undefined}
+                              key={stat.label}
+                            >
+                              <dt>{stat.label}</dt>
+                              <dd>{stat.value}</dd>
+                            </div>
+                          ))}
+                        </dl>
                       </li>
                     ))}
                   </ul>
@@ -1398,7 +1450,7 @@ const ReportScreen = ({
         </article>
         <article className="panel">
           <h2>Morale</h2>
-          <dl>
+          <dl className="report-definition-list">
             <dt>Units routed</dt>
             <dd>{result.report.morale.unitsRouted}</dd>
             <dt>Formation breaks</dt>
@@ -1423,11 +1475,11 @@ const ReportScreen = ({
         </article>
         <article className="panel">
           <h2>Model metrics</h2>
-          <dl>
+          <dl className="metric-list">
             {Object.entries(result.report.metrics).map(([key, value]) => (
               <div className="metric-row" key={key}>
-                <dt>{key.replace(/([A-Z])/g, " $1").trim()}</dt>
-                <dd>{value}</dd>
+                <dt>{formatMetricLabel(key)}</dt>
+                <dd>{formatMetricValue(key, value)}</dd>
               </div>
             ))}
           </dl>
