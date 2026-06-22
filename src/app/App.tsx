@@ -47,7 +47,7 @@ import type {
 import { loadContentRegistry, type ContentRegistry } from "../domain/content";
 import { DAMAGE_CAUSE_LABEL, formatTime, summarizeOutcome } from "../domain/report";
 import { BattleScene } from "../render/BattleScene";
-import { unitStateAt } from "../render/timelinePlayer";
+import { allUnitStatesAt, unitStateAt } from "../render/timelinePlayer";
 import {
   createDefaultSetup,
   performanceWarningForCount,
@@ -1051,6 +1051,53 @@ const PlaybackScreen = ({
     .slice(-5)
     .reverse();
   const isComplete = time >= result.timeline.duration;
+  const battlefieldStatus = useMemo(() => {
+    const states = allUnitStatesAt(result, time);
+    let armyALiving = 0;
+    let armyBLiving = 0;
+    let armyACurrentHealth = 0;
+    let armyAMaximumHealth = 0;
+    let armyBCurrentHealth = 0;
+    let armyBMaximumHealth = 0;
+
+    for (const state of states) {
+      const baseHealth = registry.unitMap.get(state.unitTypeId)?.baseHealth ?? 0;
+      const clampedHealth = Math.max(0, Math.min(state.health, baseHealth));
+
+      if (state.armyId === "A") {
+        armyACurrentHealth += clampedHealth;
+        armyAMaximumHealth += baseHealth;
+        if (state.healthState !== "dead") {
+          armyALiving += 1;
+        }
+      } else {
+        armyBCurrentHealth += clampedHealth;
+        armyBMaximumHealth += baseHealth;
+        if (state.healthState !== "dead") {
+          armyBLiving += 1;
+        }
+      }
+    }
+
+    const livingTotal = armyALiving + armyBLiving;
+
+    return {
+      armyAHealth: {
+        current: armyACurrentHealth,
+        maximum: armyAMaximumHealth,
+        percent: armyAMaximumHealth > 0 ? (armyACurrentHealth / armyAMaximumHealth) * 100 : 0,
+      },
+      armyALiving,
+      armyBHealth: {
+        current: armyBCurrentHealth,
+        maximum: armyBMaximumHealth,
+        percent: armyBMaximumHealth > 0 ? (armyBCurrentHealth / armyBMaximumHealth) * 100 : 0,
+      },
+      armyBLiving,
+      livingTotal,
+      startingTotal: states.length,
+    };
+  }, [registry.unitMap, result, time]);
 
   const capture = () => {
     const dataUrl = sceneRef.current?.captureScreenshot();
@@ -1082,6 +1129,67 @@ const PlaybackScreen = ({
         />
         <div className="stage-hint" id="battle-controls-hint">
           Live 3D battlefield
+        </div>
+        <div
+          aria-label="Battlefield unit population and army health"
+          className="battlefield-status"
+        >
+          <div className="battlefield-counts">
+            <div className="army-a-count">
+              <strong>{battlefieldStatus.armyALiving}</strong>
+              <span>Army A</span>
+            </div>
+            <div>
+              <strong>
+                {battlefieldStatus.livingTotal} / {battlefieldStatus.startingTotal}
+              </strong>
+              <span>Total</span>
+            </div>
+            <div className="army-b-count">
+              <strong>{battlefieldStatus.armyBLiving}</strong>
+              <span>Army B</span>
+            </div>
+          </div>
+          <div className="army-health-rows">
+            <div className="army-health-row">
+              <div className="battlefield-health-label">
+                <span>Army A health</span>
+                <strong>
+                  {Math.round(battlefieldStatus.armyAHealth.current)} /{" "}
+                  {Math.round(battlefieldStatus.armyAHealth.maximum)}
+                </strong>
+              </div>
+              <div
+                aria-label="Army A combined health"
+                aria-valuemax={100}
+                aria-valuemin={0}
+                aria-valuenow={Math.round(battlefieldStatus.armyAHealth.percent)}
+                className="battlefield-health-track army-a-health-track"
+                role="progressbar"
+              >
+                <div style={{ width: `${battlefieldStatus.armyAHealth.percent}%` }} />
+              </div>
+            </div>
+            <div className="army-health-row">
+              <div className="battlefield-health-label">
+                <span>Army B health</span>
+                <strong>
+                  {Math.round(battlefieldStatus.armyBHealth.current)} /{" "}
+                  {Math.round(battlefieldStatus.armyBHealth.maximum)}
+                </strong>
+              </div>
+              <div
+                aria-label="Army B combined health"
+                aria-valuemax={100}
+                aria-valuemin={0}
+                aria-valuenow={Math.round(battlefieldStatus.armyBHealth.percent)}
+                className="battlefield-health-track army-b-health-track"
+                role="progressbar"
+              >
+                <div style={{ width: `${battlefieldStatus.armyBHealth.percent}%` }} />
+              </div>
+            </div>
+          </div>
         </div>
         {isComplete && (
           <div aria-live="polite" className="completion-banner" role="status">

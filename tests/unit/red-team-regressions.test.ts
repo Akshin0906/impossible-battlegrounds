@@ -335,17 +335,19 @@ describe("red-team simulation regressions", () => {
     expect(new Set(deathEvents.map((event) => event.time)).size).toBe(1);
   });
 
-  it("keeps morale collapse alerts and report accounting synchronized", () => {
+  it("keeps morale pressure from ending fights through collapse or routs", () => {
     const result = runBattle(moraleCollapseDraft(), moraleCollapseRegistry());
     const collapseAlerts = moraleCollapseAlerts(result);
+    const routEvents = result.timeline.events.filter((event) => event.type === "rout");
 
-    expect(collapseAlerts.length).toBeGreaterThan(0);
-    expect(result.report.morale.armyCollapse).toEqual(collapseAlerts[0]);
-    expect(result.report.morale.armyCollapses).toEqual(collapseAlerts);
-    expect(result.report.morale.unitsRouted).toBe(result.report.totalRouted);
-    expect(result.report.armies.A.routed + result.report.armies.B.routed).toBe(
-      result.report.totalRouted,
-    );
+    expect(collapseAlerts).toEqual([]);
+    expect(routEvents).toEqual([]);
+    expect(result.report.morale.armyCollapse).toBeUndefined();
+    expect(result.report.morale.armyCollapses).toEqual([]);
+    expect(result.report.morale.unitsRouted).toBe(0);
+    expect(result.report.totalRouted).toBe(0);
+    expect(result.report.armies.A.routed + result.report.armies.B.routed).toBe(0);
+    expect(result.outcome.reason).toMatch(/no living units/i);
   });
 
   it("describes effective engagement range in report wording as distance, not an index", () => {
