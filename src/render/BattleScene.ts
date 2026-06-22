@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type {
+  ArmyId,
   BattleResult,
   TerrainDefinition,
   TerrainObstacle,
@@ -44,7 +45,49 @@ type TerrainTextureSpec = {
   seed: number;
 };
 
+type TeamVisualStyle = {
+  banner: string;
+  ring: string;
+  trim: string;
+  glow: string;
+};
+
+type ShotEffectParts = {
+  core: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshBasicMaterial>;
+  glow: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshBasicMaterial>;
+  muzzle: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  impact: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+};
+
+type ShotEffect = THREE.Group & {
+  userData: { parts: ShotEffectParts };
+};
+
+type ExplosionEffectParts = {
+  core: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  shell: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  ring: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
+  smoke: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+};
+
+type ExplosionEffect = THREE.Group & {
+  userData: { parts: ExplosionEffectParts };
+};
+
+type BloodEffectParts = {
+  decal: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+};
+
+type BloodEffect = THREE.Group & {
+  userData: { parts: BloodEffectParts };
+};
+
 const TERRAIN_TEXTURE_SIZE = 512;
+const SKY_TEXTURE_SIZE = 256;
+const SHOT_VISUAL_SECONDS = 0.28;
+const EXPLOSION_VISUAL_SECONDS = 0.58;
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
 
 const terrainTextureSpecs: Record<string, TerrainTextureSpec> = {
   open_field: {
@@ -72,6 +115,21 @@ const terrainTextureSpecs: Record<string, TerrainTextureSpec> = {
     seed: 51973,
   },
 };
+
+const teamVisuals = {
+  A: {
+    banner: "#0284c7",
+    ring: "#38bdf8",
+    trim: "#e0f2fe",
+    glow: "#0ea5e9",
+  },
+  B: {
+    banner: "#dc2626",
+    ring: "#fb7185",
+    trim: "#fff1f2",
+    glow: "#f97316",
+  },
+} satisfies Record<ArmyId, TeamVisualStyle>;
 
 const color = (value: string): THREE.Color => new THREE.Color(value);
 
@@ -104,6 +162,7 @@ const material = (
     emissiveIntensity?: number;
     transparent?: boolean;
     opacity?: number;
+    side?: THREE.Side;
   } = {},
 ): THREE.MeshStandardMaterial => {
   const parameters: THREE.MeshStandardMaterialParameters = {
@@ -118,6 +177,9 @@ const material = (
   }
   if (options.opacity !== undefined) {
     parameters.opacity = options.opacity;
+  }
+  if (options.side !== undefined) {
+    parameters.side = options.side;
   }
   return new THREE.MeshStandardMaterial(parameters);
 };
@@ -239,6 +301,50 @@ const createBattlefieldTexture = (
   return texture;
 };
 
+const createSkyTexture = (): THREE.CanvasTexture => {
+  const canvas = document.createElement("canvas");
+  canvas.width = SKY_TEXTURE_SIZE;
+  canvas.height = SKY_TEXTURE_SIZE;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return new THREE.CanvasTexture(canvas);
+  }
+
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, "#7dd3fc");
+  gradient.addColorStop(0.48, "#bfdbfe");
+  gradient.addColorStop(0.74, "#fde68a");
+  gradient.addColorStop(1, "#f8fafc");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const random = seededRandom(90210);
+  context.globalAlpha = 0.16;
+  context.strokeStyle = "#ffffff";
+  for (let index = 0; index < 42; index += 1) {
+    const y = random() * canvas.height * 0.58;
+    const x = random() * canvas.width;
+    context.lineWidth = 1 + random() * 2;
+    context.beginPath();
+    context.moveTo(x, y);
+    context.bezierCurveTo(
+      x + 12 + random() * 28,
+      y - 3 + random() * 6,
+      x + 48 + random() * 44,
+      y - 4 + random() * 8,
+      x + 86 + random() * 70,
+      y,
+    );
+    context.stroke();
+  }
+  context.globalAlpha = 1;
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+};
+
 export class BattleScene {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
@@ -247,30 +353,39 @@ export class BattleScene {
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly unitGroups = new Map<string, THREE.Group>();
+  private readonly unitMarkers = new Map<string, THREE.Group>();
   private readonly effectGroup = new THREE.Group();
   private readonly debugGroup = new THREE.Group();
-  private readonly shotMaterial = new THREE.LineBasicMaterial({ color: "#facc15" });
-  private readonly explosionGeometry = new THREE.SphereGeometry(3.5, 10, 6);
-  private readonly explosionMaterial = new THREE.MeshBasicMaterial({
-    color: "#f97316",
+  private readonly shotCoreGeometry = new THREE.CylinderGeometry(0.055, 0.055, 1, 8);
+  private readonly shotGlowGeometry = new THREE.CylinderGeometry(0.18, 0.18, 1, 8);
+  private readonly shotMuzzleGeometry = new THREE.SphereGeometry(0.44, 8, 6);
+  private readonly explosionCoreGeometry = new THREE.SphereGeometry(1.7, 14, 10);
+  private readonly explosionShellGeometry = new THREE.SphereGeometry(1, 18, 12);
+  private readonly shockRingGeometry = new THREE.TorusGeometry(1, 0.04, 8, 48);
+  private readonly smokeGeometry = new THREE.SphereGeometry(1.2, 12, 8);
+  private readonly bloodDecalGeometry = new THREE.CircleGeometry(1, 18);
+  private readonly bloodRingGeometry = new THREE.RingGeometry(0.46, 1, 18);
+  private readonly bloodDecalMaterial = new THREE.MeshBasicMaterial({
+    color: "#991b1b",
     transparent: true,
-    opacity: 0.42,
+    opacity: 0.58,
+    depthWrite: false,
   });
-  private readonly bloodGeometry = new THREE.CircleGeometry(1, 10);
-  private readonly bloodMaterial = new THREE.MeshBasicMaterial({
-    color: "#7f1d1d",
+  private readonly bloodRingMaterial = new THREE.MeshBasicMaterial({
+    color: "#450a0a",
     transparent: true,
-    opacity: 0.62,
+    opacity: 0.44,
+    depthWrite: false,
+    side: THREE.DoubleSide,
   });
-  private readonly shotEffectPool: Array<
-    THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>
-  > = [];
-  private readonly explosionEffectPool: Array<
-    THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>
-  > = [];
-  private readonly bloodEffectPool: Array<
-    THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
-  > = [];
+  private readonly shotEffectPool: ShotEffect[] = [];
+  private readonly explosionEffectPool: ExplosionEffect[] = [];
+  private readonly bloodEffectPool: BloodEffect[] = [];
+  private readonly effectStart = new THREE.Vector3();
+  private readonly effectEnd = new THREE.Vector3();
+  private readonly effectMidpoint = new THREE.Vector3();
+  private readonly effectDirection = new THREE.Vector3();
+  private readonly effectQuaternion = new THREE.Quaternion();
   private readonly resizeObserver: ResizeObserver;
   private animationFrame = 0;
   private currentTime = 0;
@@ -291,16 +406,26 @@ export class BattleScene {
       preserveDrawingBuffer: true,
       powerPreference: "high-performance",
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
-    this.renderer.setClearColor("#dbeafe");
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2.5));
+    this.renderer.setClearColor("#bfdbfe");
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.12;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
-    this.controls.target.set(0, 0, 0);
+    this.controls.dampingFactor = 0.08;
+    this.controls.screenSpacePanning = false;
+    this.controls.minDistance = 36;
+    this.controls.maxDistance = Math.max(
+      240,
+      Math.max(result.runtimeTerrain.definition.size.x, result.runtimeTerrain.definition.size.z) *
+        1.25,
+    );
+    this.controls.minPolarAngle = Math.PI * 0.16;
+    this.controls.maxPolarAngle = Math.PI * 0.48;
+    this.controls.target.set(0, 4, 0);
     this.scene.add(this.effectGroup);
     this.scene.add(this.debugGroup);
     this.configureScene();
@@ -336,12 +461,12 @@ export class BattleScene {
 
   resetCamera(): void {
     const terrain = this.result.runtimeTerrain.definition;
-    const baseDistance = Math.max(105, terrain.size.z * 0.34, terrain.size.x * 0.22);
+    const baseDistance = Math.max(118, terrain.size.z * 0.42, terrain.size.x * 0.3);
     const narrowViewportBoost =
-      this.camera.aspect < 1 ? Math.min(2.1, 1.18 / Math.max(this.camera.aspect, 0.55)) : 1;
+      this.camera.aspect < 1 ? Math.min(2.25, 1.26 / Math.max(this.camera.aspect, 0.55)) : 1;
     const distance = baseDistance * narrowViewportBoost;
-    this.camera.position.set(0, distance, distance);
-    this.controls.target.set(0, 0, 0);
+    this.camera.position.set(-distance * 0.36, distance * 0.72, distance * 0.96);
+    this.controls.target.set(0, 4, 0);
     this.controls.update();
   }
 
@@ -360,6 +485,7 @@ export class BattleScene {
     this.disposeGpuResources();
     this.scene.clear();
     this.unitGroups.clear();
+    this.unitMarkers.clear();
     this.effectGroup.clear();
     this.debugGroup.clear();
     this.shotEffectPool.length = 0;
@@ -369,11 +495,12 @@ export class BattleScene {
   }
 
   private configureScene(): void {
-    this.scene.fog = new THREE.Fog("#dbeafe", 420, 900);
-    const ambient = new THREE.HemisphereLight("#f8fafc", "#64748b", 1.45);
+    this.scene.fog = new THREE.Fog("#cbd5e1", 300, 940);
+    this.scene.add(this.createSkyDome());
+    const ambient = new THREE.HemisphereLight("#f8fafc", "#475569", 1.28);
     this.scene.add(ambient);
-    const sun = new THREE.DirectionalLight("#ffffff", 2.7);
-    sun.position.set(-80, 160, 120);
+    const sun = new THREE.DirectionalLight("#fff7ed", 3.05);
+    sun.position.set(-110, 185, 95);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.left = -320;
@@ -383,6 +510,29 @@ export class BattleScene {
     sun.shadow.camera.near = 20;
     sun.shadow.camera.far = 460;
     this.scene.add(sun);
+
+    const rim = new THREE.DirectionalLight("#93c5fd", 1.05);
+    rim.position.set(160, 90, -180);
+    this.scene.add(rim);
+
+    const lowFill = new THREE.DirectionalLight("#fed7aa", 0.55);
+    lowFill.position.set(60, 35, 180);
+    this.scene.add(lowFill);
+  }
+
+  private createSkyDome(): THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial> {
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(980, 32, 16),
+      new THREE.MeshBasicMaterial({
+        map: createSkyTexture(),
+        side: THREE.BackSide,
+        depthWrite: false,
+        depthTest: false,
+        fog: false,
+      }),
+    );
+    dome.renderOrder = -100;
+    return dome;
   }
 
   private createTerrain(): void {
@@ -416,6 +566,8 @@ export class BattleScene {
     if (terrain.id === "urban_blocks") {
       this.addUrbanRoads(terrain);
     }
+
+    this.addTerrainDressing(terrain);
 
     for (const obstacle of this.result.runtimeTerrain.obstacles) {
       if (obstacle.kind === "tree") {
@@ -462,6 +614,75 @@ export class BattleScene {
     positions.needsUpdate = true;
     geometry.computeVertexNormals();
     return geometry;
+  }
+
+  private addTerrainDressing(terrain: TerrainDefinition): void {
+    const spec = terrainTextureSpecs[terrain.id] ?? terrainTextureSpecs.open_field;
+    const random = seededRandom(spec.seed + 6113);
+    const count =
+      terrain.id === "forest"
+        ? 140
+        : terrain.id === "rocky_hills"
+          ? 96
+          : terrain.id === "urban_blocks"
+            ? 56
+            : 90;
+    const geometry =
+      terrain.id === "urban_blocks"
+        ? new THREE.BoxGeometry(1, 1, 1)
+        : terrain.id === "rocky_hills"
+          ? new THREE.DodecahedronGeometry(1, 0)
+          : new THREE.ConeGeometry(0.34, 1, 5);
+    const dressingMaterial = material(
+      terrain.id === "urban_blocks"
+        ? "#3f3f46"
+        : terrain.id === "rocky_hills"
+          ? "#78716c"
+          : terrain.id === "forest"
+            ? "#166534"
+            : "#4d7c0f",
+      {
+        roughness: terrain.id === "urban_blocks" ? 0.82 : 0.9,
+        metalness: terrain.id === "urban_blocks" ? 0.04 : 0,
+      },
+    );
+    const dressing = new THREE.InstancedMesh(geometry, dressingMaterial, count);
+    dressing.name = "battlefield-dressing";
+    dressing.castShadow = true;
+    dressing.receiveShadow = true;
+
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const rotation = new THREE.Euler();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+
+    for (let index = 0; index < count; index += 1) {
+      const x = (random() - 0.5) * terrain.size.x * 0.92;
+      const z = (random() - 0.5) * terrain.size.z * 0.92;
+      const baseSize = 0.55 + random() * 1.15;
+      const groundY = terrainHeightAt(terrain, x, z);
+      const yaw = random() * Math.PI * 2;
+      if (terrain.id === "urban_blocks") {
+        scale.set(baseSize * (0.7 + random()), 0.18 + random() * 0.18, baseSize * 1.45);
+        position.set(x, groundY + scale.y * 0.5 + 0.08, z);
+        rotation.set(random() * 0.08, yaw, random() * 0.08);
+      } else if (terrain.id === "rocky_hills") {
+        scale.set(baseSize * 1.05, baseSize * (0.36 + random() * 0.22), baseSize * 0.82);
+        position.set(x, groundY + scale.y * 0.42, z);
+        rotation.set(random() * 0.45, yaw, random() * 0.45);
+      } else {
+        const height = terrain.id === "forest" ? baseSize * 1.55 : baseSize * 0.9;
+        scale.set(baseSize * 0.42, height, baseSize * 0.42);
+        position.set(x, groundY + height * 0.48, z);
+        rotation.set(random() * 0.12, yaw, random() * 0.12);
+      }
+      quaternion.setFromEuler(rotation);
+      matrix.compose(position, quaternion, scale);
+      dressing.setMatrixAt(index, matrix);
+    }
+    dressing.instanceMatrix.needsUpdate = true;
+    this.scene.add(dressing);
   }
 
   private addUrbanRoads(terrain: TerrainDefinition): void {
@@ -672,54 +893,52 @@ export class BattleScene {
   private createUnits(): void {
     for (const meta of this.result.timeline.unitMeta) {
       const definition = this.registry.unitMap.get(meta.unitTypeId)!;
-      const group = this.createUnitGroup(definition);
+      const group = this.createUnitGroup(definition, meta.armyId);
       group.userData.unitId = meta.id;
       group.traverse((child) => {
         child.userData.unitId = meta.id;
       });
       this.unitGroups.set(meta.id, group);
       this.scene.add(group);
+
+      const marker = this.createUnitMarker(definition.size, meta.armyId);
+      marker.userData.unitId = meta.id;
+      this.unitMarkers.set(meta.id, marker);
+      this.scene.add(marker);
     }
     this.syncUnits(0);
   }
 
-  private createUnitGroup(definition: UnitDefinition): THREE.Group {
+  private createUnitGroup(definition: UnitDefinition, armyId: ArmyId): THREE.Group {
     const materials = this.createUnitMaterials(definition);
     const group = new THREE.Group();
 
     if (definition.id === "roman_legionary") {
-      return this.createRomanLegionary(group, definition, materials);
-    }
-    if (definition.id === "medieval_knight") {
-      return this.createMedievalKnight(group, definition, materials);
-    }
-    if (definition.id === "samurai") {
-      return this.createSamurai(group, definition, materials);
-    }
-    if (definition.category === "modern") {
-      return this.createModernInfantry(group, definition, materials);
-    }
-    if (definition.id === "wolf") {
-      return this.createWolf(group, definition, materials);
-    }
-    if (definition.id === "grizzly_bear") {
-      return this.createGrizzlyBear(group, definition, materials);
-    }
-    if (definition.id === "african_elephant") {
-      return this.createElephant(group, definition, materials);
-    }
-    if (definition.visual.archetype === "warlord") {
-      return this.createWarlord(group, definition, materials);
-    }
-    if (definition.visual.archetype === "powered_armor") {
-      return this.createPoweredArmor(group, definition, materials);
-    }
-    if (definition.visual.archetype === "android") {
-      return this.createAndroid(group, definition, materials);
+      this.createRomanLegionary(group, definition, materials);
+    } else if (definition.id === "medieval_knight") {
+      this.createMedievalKnight(group, definition, materials);
+    } else if (definition.id === "samurai") {
+      this.createSamurai(group, definition, materials);
+    } else if (definition.category === "modern") {
+      this.createModernInfantry(group, definition, materials);
+    } else if (definition.id === "wolf") {
+      this.createWolf(group, definition, materials);
+    } else if (definition.id === "grizzly_bear") {
+      this.createGrizzlyBear(group, definition, materials);
+    } else if (definition.id === "african_elephant") {
+      this.createElephant(group, definition, materials);
+    } else if (definition.visual.archetype === "warlord") {
+      this.createWarlord(group, definition, materials);
+    } else if (definition.visual.archetype === "powered_armor") {
+      this.createPoweredArmor(group, definition, materials);
+    } else if (definition.visual.archetype === "android") {
+      this.createAndroid(group, definition, materials);
+    } else {
+      this.addHumanoidBase(group, definition.size, materials);
+      group.userData.visualScale = 1.32;
     }
 
-    this.addHumanoidBase(group, definition.size, materials);
-    group.userData.visualScale = 1.32;
+    this.addTeamTag(group, definition.size, armyId);
     return group;
   }
 
@@ -750,6 +969,79 @@ export class BattleScene {
         emissiveIntensity: fiction ? 0.7 : 0.2,
       }),
     };
+  }
+
+  private addTeamTag(group: THREE.Group, scale: number, armyId: ArmyId): void {
+    const team = teamVisuals[armyId];
+    const bannerMaterial = material(team.banner, {
+      roughness: 0.36,
+      metalness: 0.08,
+      emissive: team.glow,
+      emissiveIntensity: 0.14,
+      side: THREE.DoubleSide,
+    });
+    const trimMaterial = material(team.trim, {
+      roughness: 0.42,
+      emissive: team.glow,
+      emissiveIntensity: 0.08,
+    });
+    const pole = polishedMesh(
+      new THREE.CylinderGeometry(scale * 0.018, scale * 0.018, scale * 0.82, 8),
+      trimMaterial,
+    );
+    pole.position.set(scale * -0.36, scale * 1.45, scale * -0.28);
+
+    const bannerShape = new THREE.Shape();
+    bannerShape.moveTo(0, scale * 0.16);
+    bannerShape.lineTo(scale * 0.3, scale * 0.09);
+    bannerShape.lineTo(scale * 0.22, 0);
+    bannerShape.lineTo(scale * 0.3, scale * -0.09);
+    bannerShape.lineTo(0, scale * -0.16);
+    bannerShape.lineTo(0, scale * 0.16);
+    const banner = polishedMesh(new THREE.ShapeGeometry(bannerShape), bannerMaterial);
+    banner.position.set(scale * -0.34, scale * 1.66, scale * -0.28);
+
+    const chestStripe = polishedMesh(
+      new THREE.BoxGeometry(scale * 0.5, scale * 0.045, scale * 0.05),
+      bannerMaterial,
+    );
+    chestStripe.position.set(0, scale * 1.3, scale * 0.23);
+    group.add(pole, banner, chestStripe);
+  }
+
+  private createUnitMarker(scale: number, armyId: ArmyId): THREE.Group {
+    const team = teamVisuals[armyId];
+    const marker = new THREE.Group();
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(scale * 0.68, scale * 0.022, 6, 42),
+      new THREE.MeshBasicMaterial({
+        color: team.ring,
+        transparent: true,
+        opacity: 0.62,
+        depthWrite: false,
+      }),
+    );
+    ring.rotation.x = Math.PI / 2;
+
+    const forwardShape = new THREE.Shape();
+    forwardShape.moveTo(0, scale * 0.88);
+    forwardShape.lineTo(scale * 0.16, scale * 0.52);
+    forwardShape.lineTo(scale * -0.16, scale * 0.52);
+    forwardShape.lineTo(0, scale * 0.88);
+    const forward = new THREE.Mesh(
+      new THREE.ShapeGeometry(forwardShape),
+      new THREE.MeshBasicMaterial({
+        color: team.trim,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    forward.rotation.x = Math.PI / 2;
+    forward.position.y = 0.018;
+    marker.add(ring, forward);
+    return marker;
   }
 
   private addHumanoidBase(
@@ -1390,6 +1682,13 @@ export class BattleScene {
       group.scale.setScalar((state.healthState === "dead" ? 0.86 : 1) * visualScale);
       group.rotation.z =
         state.healthState === "dead" || state.healthState === "downed" ? Math.PI / 2 : 0;
+      const marker = this.unitMarkers.get(state.id);
+      if (marker) {
+        marker.visible = state.healthState !== "dead";
+        marker.position.set(state.position.x, state.position.y + 0.08, state.position.z);
+        marker.rotation.set(0, state.rotationY, 0);
+        marker.scale.setScalar(state.healthState === "downed" ? 0.78 : 1);
+      }
     }
   }
 
@@ -1399,30 +1698,33 @@ export class BattleScene {
     let bloodEffectCount = 0;
     this.effectGroup.clear();
     const recent = this.result.timeline.events.filter(
-      (event) => event.time <= time && time - event.time < 0.35,
+      (event) => event.time <= time && time - event.time < EXPLOSION_VISUAL_SECONDS,
     );
     for (const event of recent) {
+      const age = time - event.time;
       if (event.type === "shot_fired" && event.actorUnitId && event.targetUnitId) {
         const actor = this.unitGroups.get(event.actorUnitId);
         const target = this.unitGroups.get(event.targetUnitId);
-        if (actor && target) {
-          const line = this.getShotEffect(shotEffectCount);
+        if (actor && target && age < SHOT_VISUAL_SECONDS) {
+          const shot = this.getShotEffect(shotEffectCount);
           this.updateShotEffect(
-            line,
+            shot,
             actor.position.x,
             actor.position.y + 1.2,
             actor.position.z,
             target.position.x,
             target.position.y + 1.0,
             target.position.z,
+            age,
           );
-          this.effectGroup.add(line);
+          this.effectGroup.add(shot);
           shotEffectCount += 1;
         }
       }
       if (event.type === "explosion" && event.position) {
         const blast = this.getExplosionEffect(explosionEffectCount);
         blast.position.set(event.position.x, event.position.y + 1.6, event.position.z);
+        this.updateExplosionEffect(blast, age);
         this.effectGroup.add(blast);
         explosionEffectCount += 1;
       }
@@ -1434,64 +1736,220 @@ export class BattleScene {
         event.position,
     );
     for (const event of bloodEvents.slice(-180)) {
-      const pool = this.getBloodEffect(bloodEffectCount);
-      const radius = event.type === "wound" ? 0.55 : 1.05;
-      pool.scale.set(radius, radius, radius);
-      pool.rotation.x = -Math.PI / 2;
-      pool.position.set(event.position!.x, 0.04, event.position!.z);
-      this.effectGroup.add(pool);
+      if (!event.position) {
+        continue;
+      }
+      const stain = this.getBloodEffect(bloodEffectCount);
+      const groundY =
+        terrainHeightAt(this.result.runtimeTerrain.definition, event.position.x, event.position.z) +
+        0.055;
+      this.updateBloodEffect(
+        stain,
+        event.type,
+        event.position.x,
+        groundY,
+        event.position.z,
+        event.tick,
+      );
+      this.effectGroup.add(stain);
       bloodEffectCount += 1;
     }
   }
 
-  private getShotEffect(index: number): THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial> {
+  private getShotEffect(index: number): ShotEffect {
     const pooled = this.shotEffectPool[index];
     if (pooled) {
       return pooled;
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
-    const line = new THREE.Line(geometry, this.shotMaterial);
-    line.frustumCulled = false;
-    this.shotEffectPool.push(line);
-    return line;
+    const core = new THREE.Mesh(
+      this.shotCoreGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#fff7ed",
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    const glow = new THREE.Mesh(
+      this.shotGlowGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#facc15",
+        transparent: true,
+        opacity: 0.36,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    const muzzle = new THREE.Mesh(
+      this.shotMuzzleGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#fef3c7",
+        transparent: true,
+        opacity: 0.82,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    const impact = new THREE.Mesh(
+      this.shotMuzzleGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#fb923c",
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    const shot = new THREE.Group() as ShotEffect;
+    shot.userData.parts = { core, glow, muzzle, impact };
+    shot.frustumCulled = false;
+    shot.add(glow, core, muzzle, impact);
+    this.shotEffectPool.push(shot);
+    return shot;
   }
 
   private updateShotEffect(
-    line: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>,
+    shot: ShotEffect,
     fromX: number,
     fromY: number,
     fromZ: number,
     toX: number,
     toY: number,
     toZ: number,
+    age: number,
   ): void {
-    const positions = line.geometry.getAttribute("position") as THREE.BufferAttribute;
-    positions.setXYZ(0, fromX, fromY, fromZ);
-    positions.setXYZ(1, toX, toY, toZ);
-    positions.needsUpdate = true;
+    const parts = shot.userData.parts;
+    this.effectStart.set(fromX, fromY, fromZ);
+    this.effectEnd.set(toX, toY, toZ);
+    this.effectDirection.copy(this.effectEnd).sub(this.effectStart);
+    const length = Math.max(0.001, this.effectDirection.length());
+    this.effectDirection.multiplyScalar(1 / length);
+    this.effectMidpoint.copy(this.effectStart).add(this.effectEnd).multiplyScalar(0.5);
+    this.effectQuaternion.setFromUnitVectors(UP_AXIS, this.effectDirection);
+    for (const tracer of [parts.glow, parts.core]) {
+      tracer.position.copy(this.effectMidpoint);
+      tracer.quaternion.copy(this.effectQuaternion);
+      tracer.scale.set(1, length, 1);
+    }
+    parts.muzzle.position.copy(this.effectStart);
+    parts.impact.position.copy(this.effectEnd);
+
+    const fade = Math.max(0, 1 - age / SHOT_VISUAL_SECONDS);
+    parts.core.material.opacity = 0.96 * fade;
+    parts.glow.material.opacity = 0.38 * fade;
+    parts.muzzle.material.opacity = 0.82 * fade;
+    parts.impact.material.opacity = 0.7 * fade;
+    parts.muzzle.scale.setScalar(0.85 + (1 - fade) * 0.5);
+    parts.impact.scale.setScalar(0.65 + (1 - fade) * 0.8);
   }
 
-  private getExplosionEffect(
-    index: number,
-  ): THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial> {
+  private getExplosionEffect(index: number): ExplosionEffect {
     const pooled = this.explosionEffectPool[index];
     if (pooled) {
       return pooled;
     }
-    const blast = new THREE.Mesh(this.explosionGeometry, this.explosionMaterial);
+    const core = new THREE.Mesh(
+      this.explosionCoreGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#fef3c7",
+        transparent: true,
+        opacity: 0.76,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    const shell = new THREE.Mesh(
+      this.explosionShellGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#fb923c",
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    const ring = new THREE.Mesh(
+      this.shockRingGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#fde047",
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    const smoke = new THREE.Mesh(
+      this.smokeGeometry,
+      new THREE.MeshBasicMaterial({
+        color: "#334155",
+        transparent: true,
+        opacity: 0.26,
+        depthWrite: false,
+      }),
+    );
+    const blast = new THREE.Group() as ExplosionEffect;
+    blast.userData.parts = { core, shell, ring, smoke };
+    blast.add(shell, ring, core, smoke);
     this.explosionEffectPool.push(blast);
     return blast;
   }
 
-  private getBloodEffect(index: number): THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial> {
+  private updateExplosionEffect(blast: ExplosionEffect, age: number): void {
+    const parts = blast.userData.parts;
+    const t = Math.max(0, Math.min(1, age / EXPLOSION_VISUAL_SECONDS));
+    const out = 1 - (1 - t) * (1 - t);
+    parts.core.scale.setScalar(0.85 + out * 0.9);
+    parts.shell.scale.setScalar(2.2 + out * 4.4);
+    parts.ring.scale.setScalar(2.8 + out * 8.5);
+    parts.smoke.position.y = 0.8 + out * 3.6;
+    parts.smoke.scale.setScalar(1.2 + out * 2.4);
+    parts.core.material.opacity = 0.76 * (1 - t);
+    parts.shell.material.opacity = 0.42 * (1 - t);
+    parts.ring.material.opacity = 0.48 * (1 - t);
+    parts.smoke.material.opacity = 0.08 + 0.24 * Math.sin(t * Math.PI);
+  }
+
+  private getBloodEffect(index: number): BloodEffect {
     const pooled = this.bloodEffectPool[index];
     if (pooled) {
       return pooled;
     }
-    const pool = new THREE.Mesh(this.bloodGeometry, this.bloodMaterial);
-    this.bloodEffectPool.push(pool);
-    return pool;
+    const decal = new THREE.Mesh(this.bloodDecalGeometry, this.bloodDecalMaterial);
+    decal.rotation.x = -Math.PI / 2;
+    const ring = new THREE.Mesh(this.bloodRingGeometry, this.bloodRingMaterial);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.004;
+    const stain = new THREE.Group() as BloodEffect;
+    stain.userData.parts = { decal, ring };
+    stain.add(decal, ring);
+    this.bloodEffectPool.push(stain);
+    return stain;
+  }
+
+  private updateBloodEffect(
+    stain: BloodEffect,
+    eventType: string,
+    x: number,
+    y: number,
+    z: number,
+    tick: number,
+  ): void {
+    const parts = stain.userData.parts;
+    const radius = eventType === "wound" ? 0.52 : eventType === "unit_down" ? 0.86 : 1.16;
+    stain.position.set(x, y, z);
+    stain.rotation.y = (tick % 31) * 0.19;
+    stain.scale.set(radius, radius, radius);
+    parts.ring.visible = eventType !== "wound";
   }
 
   private readonly handlePointer = (event: PointerEvent): void => {
@@ -1560,11 +2018,17 @@ export class BattleScene {
     ]) {
       this.disposeObjectResources(effect, resources);
     }
-    this.disposeGeometry(this.explosionGeometry, resources);
-    this.disposeGeometry(this.bloodGeometry, resources);
-    this.disposeMaterial(this.shotMaterial, resources);
-    this.disposeMaterial(this.explosionMaterial, resources);
-    this.disposeMaterial(this.bloodMaterial, resources);
+    this.disposeGeometry(this.shotCoreGeometry, resources);
+    this.disposeGeometry(this.shotGlowGeometry, resources);
+    this.disposeGeometry(this.shotMuzzleGeometry, resources);
+    this.disposeGeometry(this.explosionCoreGeometry, resources);
+    this.disposeGeometry(this.explosionShellGeometry, resources);
+    this.disposeGeometry(this.shockRingGeometry, resources);
+    this.disposeGeometry(this.smokeGeometry, resources);
+    this.disposeGeometry(this.bloodDecalGeometry, resources);
+    this.disposeGeometry(this.bloodRingGeometry, resources);
+    this.disposeMaterial(this.bloodDecalMaterial, resources);
+    this.disposeMaterial(this.bloodRingMaterial, resources);
   }
 
   private disposeObjectResources(root: THREE.Object3D, resources: ResourceTracker): void {
