@@ -6,13 +6,18 @@ import {
   Camera,
   CheckCircle2,
   Copy,
+  Crosshair,
+  Gauge,
+  MapIcon,
   Pause,
   Play,
   Plus,
   RefreshCw,
   RotateCcw,
+  Shield,
   Shuffle,
   SkipForward,
+  Swords,
   Trash2,
 } from "lucide-react";
 import {
@@ -259,6 +264,24 @@ const CopySeedButton = ({
   );
 };
 
+const SummaryTile = ({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  tone?: string;
+}) => (
+  <div className={tone ? `summary-tile ${tone}` : "summary-tile"}>
+    <span className="summary-icon">{icon}</span>
+    <span>{label}</span>
+    <strong>{value}</strong>
+  </div>
+);
+
 const AppFatalErrorScreen = ({
   error,
   errorInfo,
@@ -341,10 +364,19 @@ const ArmyPanel = ({
     });
   };
   return (
-    <section className="panel army-panel" aria-label={`Army ${armyId}`}>
-      <div className="panel-title">
-        <h2>Army {armyId}</h2>
-        <span>{totalForArmy(army)} units</span>
+    <section
+      className={`panel army-panel army-${armyId.toLowerCase()}`}
+      aria-label={`Army ${armyId}`}
+    >
+      <div className="army-header">
+        <div className="army-mark" aria-hidden="true">
+          {armyId}
+        </div>
+        <div>
+          <p className="eyebrow army-eyebrow">Deployment</p>
+          <h2>Army {armyId}</h2>
+        </div>
+        <span className="unit-count-badge">{totalForArmy(army)} units</span>
       </div>
       <div className="squad-list">
         {army.squads.map((squad, index) => {
@@ -360,6 +392,13 @@ const ArmyPanel = ({
               className={rowDiagnostics.length > 0 ? "squad-row has-diagnostics" : "squad-row"}
               key={squad.id}
             >
+              <div className="squad-header">
+                <div>
+                  <span className="squad-index">Squad {index + 1}</span>
+                  <strong>{unit.displayName}</strong>
+                </div>
+                <span className="role-badge">{roleLabels[squad.deploymentRole]}</span>
+              </div>
               <div className="squad-main">
                 <label>
                   <span>Unit</span>
@@ -431,7 +470,7 @@ const ArmyPanel = ({
                   </select>
                 </label>
               </div>
-              <div className="toggle-strip">
+              <div className="toggle-strip" aria-label="Loadout modifiers">
                 {Object.entries(currentLoadout.toggles).map(([key, value]) => {
                   if (typeof value === "boolean") {
                     return (
@@ -475,7 +514,11 @@ const ArmyPanel = ({
                   );
                 })}
               </div>
-              <div className="role-strip" role="group" aria-label="Deployment role">
+              <div
+                className="role-strip segmented-control"
+                role="group"
+                aria-label="Deployment role"
+              >
                 {Object.entries(roleLabels).map(([role, label]) => (
                   <button
                     aria-pressed={squad.deploymentRole === role}
@@ -549,16 +592,46 @@ const SetupScreen = ({
   const diagnosticsId = "setup-validation-diagnostics";
   return (
     <main className="setup-layout">
-      <header className="app-header">
-        <div>
+      <header className="app-header command-header">
+        <div className="header-copy">
+          <p className="eyebrow header-eyebrow">
+            <Swords size={14} />
+            Simulator console
+          </p>
           <h1>Impossible Battlegrounds</h1>
           <p>Evidence-informed deterministic sandbox battles.</p>
+        </div>
+        <div className="command-visual" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
         </div>
         <div className="identity-pill">
           <Activity size={16} />
           v1 simulation
         </div>
       </header>
+      <section className="mission-summary" aria-label="Battle summary">
+        <SummaryTile
+          icon={<Shield size={18} />}
+          label="Army A"
+          tone="army-a"
+          value={`${totalForArmy(setup.armyA)} units`}
+        />
+        <SummaryTile
+          icon={<Crosshair size={18} />}
+          label="Army B"
+          tone="army-b"
+          value={`${totalForArmy(setup.armyB)} units`}
+        />
+        <SummaryTile
+          icon={<MapIcon size={18} />}
+          label="Terrain"
+          value={registry.terrainMap.get(setup.terrainId)?.displayName ?? "Unknown"}
+        />
+        <SummaryTile icon={<Gauge size={18} />} label="Forecast" tone="forecast" value={odds} />
+      </section>
       <div className="armies-grid">
         <ArmyPanel
           registry={registry}
@@ -573,7 +646,14 @@ const SetupScreen = ({
           onChange={(armyB) => setSetup({ ...setup, armyB })}
         />
       </div>
-      <section className="panel setup-controls">
+      <section className="panel setup-controls command-panel">
+        <div className="setup-controls-header">
+          <div>
+            <p className="eyebrow">Scenario</p>
+            <h2>Mission parameters</h2>
+          </div>
+          <strong className="odds-pill">{odds}</strong>
+        </div>
         <div className="setup-control-grid">
           <label>
             <span>Terrain</span>
@@ -623,7 +703,6 @@ const SetupScreen = ({
           <CopySeedButton className="seed-copy-button" iconOnly seed={setup.seed} />
         </div>
         <div aria-live="polite" className="odds-row">
-          <strong>{odds}</strong>
           {warning && <span className="warning">{warning}</span>}
         </div>
         <DiagnosticsList diagnostics={diagnostics} id={diagnosticsId} />
@@ -853,7 +932,7 @@ const PlaybackScreen = ({
           sceneRef={sceneRef}
         />
         <div className="stage-hint" id="battle-controls-hint">
-          Drag to rotate. Scroll to zoom. Click a unit to inspect.
+          Live 3D battlefield
         </div>
         {isComplete && (
           <div aria-live="polite" className="completion-banner" role="status">
@@ -882,10 +961,15 @@ const PlaybackScreen = ({
         )}
       </section>
       <aside className="battle-sidebar">
-        <div className="panel playback-panel">
-          <div className="time-row">
-            <strong>{formatTime(time)}</strong>
-            <span>{formatTime(result.timeline.duration)}</span>
+        <div className="panel playback-panel control-panel">
+          <div className="panel-title playback-title">
+            <div>
+              <p className="eyebrow">Playback</p>
+              <h2>Timeline</h2>
+            </div>
+            <span className="duration-pill">
+              {formatTime(time)} / {formatTime(result.timeline.duration)}
+            </span>
           </div>
           <input
             aria-label="Timeline"
@@ -896,7 +980,7 @@ const PlaybackScreen = ({
             value={time}
             onChange={(event) => setTime(Number(event.target.value))}
           />
-          <div className="icon-row">
+          <div className="icon-row playback-toolbar">
             <button
               aria-label={playing ? "Pause playback" : "Play playback"}
               title={playing ? "Pause" : "Play"}
@@ -935,7 +1019,7 @@ const PlaybackScreen = ({
               <Camera size={18} />
             </button>
           </div>
-          <div className="run-controls">
+          <div className="run-controls command-actions">
             <button className="secondary" type="button" onClick={replay}>
               <RotateCcw size={16} />
               Replay
@@ -966,7 +1050,7 @@ const PlaybackScreen = ({
             <span>Developer mode</span>
           </label>
         </div>
-        <section className="panel">
+        <section className="panel alerts-panel">
           <h2>Major alerts</h2>
           <div className="alert-list">
             {alerts.length === 0 ? (
@@ -992,10 +1076,24 @@ const PlaybackScreen = ({
               </dd>
               <dt>Health</dt>
               <dd>
+                <progress
+                  aria-label="Selected unit health"
+                  className="unit-progress health-progress"
+                  max={selectedDefinition.baseHealth}
+                  value={selected.health}
+                />
                 {Math.round(selected.health)} / {selectedDefinition.baseHealth}
               </dd>
               <dt>Morale</dt>
-              <dd>{Math.round(selected.morale)} / 100</dd>
+              <dd>
+                <progress
+                  aria-label="Selected unit morale"
+                  className="unit-progress morale-progress"
+                  max={100}
+                  value={selected.morale}
+                />
+                {Math.round(selected.morale)} / 100
+              </dd>
               <dt>Ammo</dt>
               <dd>
                 {selectedFinal
@@ -1040,7 +1138,7 @@ const ReportScreen = ({
   const outcomeLabel = summarizeOutcome(result.report);
   return (
     <main className="report-layout">
-      <header className="app-header report-header">
+      <header className="app-header report-header command-header">
         <div>
           <p className="eyebrow">Battle complete</p>
           <h1>Battle report</h1>
