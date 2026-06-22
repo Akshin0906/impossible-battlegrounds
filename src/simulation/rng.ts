@@ -31,6 +31,9 @@ export class DeterministicRng {
   intInclusive(min: number, max: number): number {
     const low = Math.ceil(min);
     const high = Math.floor(max);
+    if (high < low) {
+      throw new RangeError(`Invalid inclusive integer range: ${min}..${max}`);
+    }
     return low + (this.nextUint() % (high - low + 1));
   }
 

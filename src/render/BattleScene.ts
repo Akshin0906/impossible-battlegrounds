@@ -9,7 +9,20 @@ type SceneOptions = {
   developerMode: boolean;
 };
 
+type RenderableObject = THREE.Object3D & {
+  geometry?: THREE.BufferGeometry;
+  material?: THREE.Material | THREE.Material[];
+};
+
+type ResourceTracker = {
+  geometries: Set<THREE.BufferGeometry>;
+  materials: Set<THREE.Material>;
+  textures: Set<object>;
+};
+
 const color = (value: string): THREE.Color => new THREE.Color(value);
+
+const isTexture = (value: unknown): value is THREE.Texture => value instanceof THREE.Texture;
 
 const polishedMesh = (
   geometry: THREE.BufferGeometry,
@@ -31,10 +44,34 @@ export class BattleScene {
   private readonly unitGroups = new Map<string, THREE.Group>();
   private readonly effectGroup = new THREE.Group();
   private readonly debugGroup = new THREE.Group();
+  private readonly shotMaterial = new THREE.LineBasicMaterial({ color: "#facc15" });
+  private readonly explosionGeometry = new THREE.SphereGeometry(3.5, 10, 6);
+  private readonly explosionMaterial = new THREE.MeshBasicMaterial({
+    color: "#f97316",
+    transparent: true,
+    opacity: 0.42,
+  });
+  private readonly bloodGeometry = new THREE.CircleGeometry(1, 10);
+  private readonly bloodMaterial = new THREE.MeshBasicMaterial({
+    color: "#7f1d1d",
+    transparent: true,
+    opacity: 0.62,
+  });
+  private readonly shotEffectPool: Array<
+    THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>
+  > = [];
+  private readonly explosionEffectPool: Array<
+    THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>
+  > = [];
+  private readonly bloodEffectPool: Array<
+    THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
+  > = [];
   private readonly resizeObserver: ResizeObserver;
   private animationFrame = 0;
   private currentTime = 0;
+  private contextLost = false;
   private developerMode: boolean;
+  private disposed = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -64,11 +101,13 @@ export class BattleScene {
     this.configureScene();
     this.createTerrain();
     this.createUnits();
-    this.resetCamera();
     canvas.addEventListener("pointerdown", this.handlePointer);
+    canvas.addEventListener("webglcontextlost", this.handleContextLost);
+    canvas.addEventListener("webglcontextrestored", this.handleContextRestored);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement ?? canvas);
     this.resize();
+    this.resetCamera();
     this.animate();
   }
 
@@ -84,22 +123,43 @@ export class BattleScene {
   }
 
   captureScreenshot(): string {
-    this.renderer.render(this.scene, this.camera);
+    if (!this.contextLost) {
+      this.renderer.render(this.scene, this.camera);
+    }
     return this.canvas.toDataURL("image/png");
   }
 
   resetCamera(): void {
     const terrain = this.result.runtimeTerrain.definition;
-    this.camera.position.set(0, Math.max(105, terrain.size.z * 0.34), terrain.size.z * 0.34);
+    const baseDistance = Math.max(105, terrain.size.z * 0.34, terrain.size.x * 0.22);
+    const narrowViewportBoost =
+      this.camera.aspect < 1 ? Math.min(2.1, 1.18 / Math.max(this.camera.aspect, 0.55)) : 1;
+    const distance = baseDistance * narrowViewportBoost;
+    this.camera.position.set(0, distance, distance);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
     cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
     this.canvas.removeEventListener("pointerdown", this.handlePointer);
+    this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.removeEventListener("webglcontextrestored", this.handleContextRestored);
     this.resizeObserver.disconnect();
     this.controls.dispose();
+    this.disposeGpuResources();
+    this.scene.clear();
+    this.unitGroups.clear();
+    this.effectGroup.clear();
+    this.debugGroup.clear();
+    this.shotEffectPool.length = 0;
+    this.explosionEffectPool.length = 0;
+    this.bloodEffectPool.length = 0;
     this.renderer.dispose();
   }
 
@@ -414,6 +474,9 @@ export class BattleScene {
   }
 
   private syncEffects(time: number): void {
+    let shotEffectCount = 0;
+    let explosionEffectCount = 0;
+    let bloodEffectCount = 0;
     this.effectGroup.clear();
     const recent = this.result.timeline.events.filter(
       (event) => event.time <= time && time - event.time < 0.35,
@@ -423,24 +486,25 @@ export class BattleScene {
         const actor = this.unitGroups.get(event.actorUnitId);
         const target = this.unitGroups.get(event.targetUnitId);
         if (actor && target) {
-          const points = [
-            new THREE.Vector3(actor.position.x, actor.position.y + 1.2, actor.position.z),
-            new THREE.Vector3(target.position.x, target.position.y + 1.0, target.position.z),
-          ];
-          const line = new THREE.Line(
-            new THREE.BufferGeometry().setFromPoints(points),
-            new THREE.LineBasicMaterial({ color: "#facc15" }),
+          const line = this.getShotEffect(shotEffectCount);
+          this.updateShotEffect(
+            line,
+            actor.position.x,
+            actor.position.y + 1.2,
+            actor.position.z,
+            target.position.x,
+            target.position.y + 1.0,
+            target.position.z,
           );
           this.effectGroup.add(line);
+          shotEffectCount += 1;
         }
       }
       if (event.type === "explosion" && event.position) {
-        const blast = new THREE.Mesh(
-          new THREE.SphereGeometry(3.5, 10, 6),
-          new THREE.MeshBasicMaterial({ color: "#f97316", transparent: true, opacity: 0.42 }),
-        );
+        const blast = this.getExplosionEffect(explosionEffectCount);
         blast.position.set(event.position.x, event.position.y + 1.6, event.position.z);
         this.effectGroup.add(blast);
+        explosionEffectCount += 1;
       }
     }
     const bloodEvents = this.result.timeline.events.filter(
@@ -450,14 +514,64 @@ export class BattleScene {
         event.position,
     );
     for (const event of bloodEvents.slice(-180)) {
-      const pool = new THREE.Mesh(
-        new THREE.CircleGeometry(event.type === "wound" ? 0.55 : 1.05, 10),
-        new THREE.MeshBasicMaterial({ color: "#7f1d1d", transparent: true, opacity: 0.62 }),
-      );
+      const pool = this.getBloodEffect(bloodEffectCount);
+      const radius = event.type === "wound" ? 0.55 : 1.05;
+      pool.scale.set(radius, radius, radius);
       pool.rotation.x = -Math.PI / 2;
       pool.position.set(event.position!.x, 0.04, event.position!.z);
       this.effectGroup.add(pool);
+      bloodEffectCount += 1;
     }
+  }
+
+  private getShotEffect(index: number): THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial> {
+    const pooled = this.shotEffectPool[index];
+    if (pooled) {
+      return pooled;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+    const line = new THREE.Line(geometry, this.shotMaterial);
+    line.frustumCulled = false;
+    this.shotEffectPool.push(line);
+    return line;
+  }
+
+  private updateShotEffect(
+    line: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>,
+    fromX: number,
+    fromY: number,
+    fromZ: number,
+    toX: number,
+    toY: number,
+    toZ: number,
+  ): void {
+    const positions = line.geometry.getAttribute("position") as THREE.BufferAttribute;
+    positions.setXYZ(0, fromX, fromY, fromZ);
+    positions.setXYZ(1, toX, toY, toZ);
+    positions.needsUpdate = true;
+  }
+
+  private getExplosionEffect(
+    index: number,
+  ): THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial> {
+    const pooled = this.explosionEffectPool[index];
+    if (pooled) {
+      return pooled;
+    }
+    const blast = new THREE.Mesh(this.explosionGeometry, this.explosionMaterial);
+    this.explosionEffectPool.push(blast);
+    return blast;
+  }
+
+  private getBloodEffect(index: number): THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial> {
+    const pooled = this.bloodEffectPool[index];
+    if (pooled) {
+      return pooled;
+    }
+    const pool = new THREE.Mesh(this.bloodGeometry, this.bloodMaterial);
+    this.bloodEffectPool.push(pool);
+    return pool;
   }
 
   private readonly handlePointer = (event: PointerEvent): void => {
@@ -472,6 +586,26 @@ export class BattleScene {
     }
   };
 
+  private readonly handleContextLost = (event: Event): void => {
+    event.preventDefault();
+    this.contextLost = true;
+    cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
+  };
+
+  private readonly handleContextRestored = (): void => {
+    if (this.disposed) {
+      return;
+    }
+    this.contextLost = false;
+    this.resize();
+    this.syncUnits(this.currentTime);
+    this.syncEffects(this.currentTime);
+    if (this.animationFrame === 0) {
+      this.animate();
+    }
+  };
+
   private resize(): void {
     const parent = this.canvas.parentElement;
     const width = Math.max(320, parent?.clientWidth ?? this.canvas.clientWidth);
@@ -482,9 +616,89 @@ export class BattleScene {
   }
 
   private animate = (): void => {
+    if (this.disposed || this.contextLost) {
+      this.animationFrame = 0;
+      return;
+    }
     this.controls.update();
     this.debugGroup.visible = this.developerMode;
     this.renderer.render(this.scene, this.camera);
     this.animationFrame = requestAnimationFrame(this.animate);
   };
+
+  private disposeGpuResources(): void {
+    const resources: ResourceTracker = {
+      geometries: new Set(),
+      materials: new Set(),
+      textures: new Set(),
+    };
+    this.disposeObjectResources(this.scene, resources);
+    for (const effect of [
+      ...this.shotEffectPool,
+      ...this.explosionEffectPool,
+      ...this.bloodEffectPool,
+    ]) {
+      this.disposeObjectResources(effect, resources);
+    }
+    this.disposeGeometry(this.explosionGeometry, resources);
+    this.disposeGeometry(this.bloodGeometry, resources);
+    this.disposeMaterial(this.shotMaterial, resources);
+    this.disposeMaterial(this.explosionMaterial, resources);
+    this.disposeMaterial(this.bloodMaterial, resources);
+  }
+
+  private disposeObjectResources(root: THREE.Object3D, resources: ResourceTracker): void {
+    root.traverse((object) => {
+      const renderable = object as RenderableObject;
+      if (renderable.geometry) {
+        this.disposeGeometry(renderable.geometry, resources);
+      }
+      if (Array.isArray(renderable.material)) {
+        for (const material of renderable.material) {
+          this.disposeMaterial(material, resources);
+        }
+      } else if (renderable.material) {
+        this.disposeMaterial(renderable.material, resources);
+      }
+    });
+  }
+
+  private disposeGeometry(geometry: THREE.BufferGeometry, resources: ResourceTracker): void {
+    if (resources.geometries.has(geometry)) {
+      return;
+    }
+    resources.geometries.add(geometry);
+    geometry.dispose();
+  }
+
+  private disposeMaterial(material: THREE.Material, resources: ResourceTracker): void {
+    if (resources.materials.has(material)) {
+      return;
+    }
+    resources.materials.add(material);
+    for (const value of Object.values(material) as unknown[]) {
+      this.disposeTextureValue(value, resources);
+    }
+    if (material instanceof THREE.ShaderMaterial) {
+      for (const uniform of Object.values(material.uniforms)) {
+        this.disposeTextureValue(uniform.value, resources);
+      }
+    }
+    material.dispose();
+  }
+
+  private disposeTextureValue(value: unknown, resources: ResourceTracker): void {
+    if (isTexture(value)) {
+      if (!resources.textures.has(value)) {
+        resources.textures.add(value);
+        value.dispose();
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        this.disposeTextureValue(item, resources);
+      }
+    }
+  }
 }

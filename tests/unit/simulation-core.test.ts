@@ -35,6 +35,12 @@ const REQUIRED_UNIT_IDS = [
 
 const REQUIRED_TERRAIN_IDS = ["open_field", "forest", "urban_blocks", "rocky_hills"] as const;
 
+const EXPECTED_RESULT_HASHES = {
+  infantryVsWolvesAlpha: "27c872fc",
+  infantryVsWolvesBeta: "a7301369",
+  androidVsBears: "806ff47f",
+} as const;
+
 const infantryVsWolvesDraft = (
   seed: string,
   loadoutId: "army_rifleman_standard" | "army_rifleman_no_grenades" = "army_rifleman_standard",
@@ -259,6 +265,7 @@ describe("simulation core verification", () => {
 
     expect(second.normalizedSetup).toEqual(first.normalizedSetup);
     expect(second.resultHash).toBe(first.resultHash);
+    expect(first.resultHash).toBe(EXPECTED_RESULT_HASHES.infantryVsWolvesAlpha);
     expect(reportTotals(second.report)).toEqual(reportTotals(first.report));
   });
 
@@ -268,6 +275,8 @@ describe("simulation core verification", () => {
 
     expectCoreInvariants(alpha);
     expectCoreInvariants(beta);
+    expect(alpha.resultHash).toBe(EXPECTED_RESULT_HASHES.infantryVsWolvesAlpha);
+    expect(beta.resultHash).toBe(EXPECTED_RESULT_HASHES.infantryVsWolvesBeta);
     expect(
       alpha.resultHash !== beta.resultHash || eventSignature(alpha) !== eventSignature(beta),
     ).toBe(true);
@@ -294,6 +303,7 @@ describe("simulation core verification", () => {
     );
 
     expect(androidIds.size).toBeGreaterThan(0);
+    expect(result.resultHash).toBe(EXPECTED_RESULT_HASHES.androidVsBears);
     expect(
       result.finalUnits
         .filter((unit) => unit.unitTypeId === "combat_android")
