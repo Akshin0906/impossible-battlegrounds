@@ -54,6 +54,12 @@ const NO_PROGRESS_CHECK_LIMIT = 8;
 const NO_TACTICAL_PROGRESS_CHECK_LIMIT = 36;
 const NO_MEANINGFUL_PROGRESS_TICKS = NO_PROGRESS_CHECK_TICKS * NO_PROGRESS_CHECK_LIMIT;
 const NO_TACTICAL_PROGRESS_TICKS = NO_PROGRESS_CHECK_TICKS * NO_TACTICAL_PROGRESS_CHECK_LIMIT;
+const keyFactorNumberFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+});
+
+const formatKeyFactorNumber = (value: number): string => keyFactorNumberFormatter.format(value);
+
 type WeaponRuntime = {
   weapon: WeaponDefinition;
   ammoRemaining: number;
@@ -1953,7 +1959,9 @@ const buildKeyFactors = (
     factors.push({
       label: "Casualties before first melee contact",
       value: `${metrics.casualtiesBeforeMelee} units`,
-      evidence: `First melee contact occurred at ${quantize(metrics.firstMeleeContactTime, 0.1)} seconds.`,
+      evidence: `First melee contact occurred at ${formatKeyFactorNumber(
+        quantize(metrics.firstMeleeContactTime, 0.1),
+      )} seconds.`,
     });
   }
   if (winner) {
@@ -1966,7 +1974,9 @@ const buildKeyFactors = (
       factors.push({
         label: `Army ${winner} effective-range pressure`,
         value: `${rangeTicks} firing ticks`,
-        evidence: `Average recorded engagement distance was ${averageRange} meters.`,
+        evidence: `Average recorded engagement distance was ${formatKeyFactorNumber(
+          averageRange,
+        )} meters.`,
       });
     }
     if (metrics.coverFireTicks[winner] > 0) {
