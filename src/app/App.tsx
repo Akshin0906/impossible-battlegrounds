@@ -57,7 +57,7 @@ import {
 } from "../workers/workerProtocol";
 import "../styles/main.css";
 
-type Screen = "setup" | "loading" | "playback" | "report" | "error";
+type Screen = "title" | "setup" | "loading" | "playback" | "report" | "error";
 
 type LoadingState = {
   step: string;
@@ -281,6 +281,61 @@ const SummaryTile = ({
     <strong>{value}</strong>
   </div>
 );
+
+const TitleScreen = ({
+  registry,
+  setup,
+  onCustomize,
+  onStart,
+}: {
+  registry: ContentRegistry;
+  setup: BattleSetupDraft;
+  onCustomize: () => void;
+  onStart: () => void;
+}) => {
+  const terrain = registry.terrainMap.get(setup.terrainId)?.displayName ?? "Unknown";
+  return (
+    <main className="title-card-screen">
+      <section aria-labelledby="title-card-heading" className="title-card">
+        <p className="eyebrow header-eyebrow">
+          <Swords size={14} />
+          deterministic sandbox
+        </p>
+        <h1 id="title-card-heading">Impossible Battlegrounds</h1>
+        <p>Set the matchup, run the simulation, inspect the aftermath.</p>
+        <div className="title-actions">
+          <button className="primary" type="button" onClick={onStart}>
+            <Play size={18} />
+            Start battle
+          </button>
+          <button className="secondary" type="button" onClick={onCustomize}>
+            Customize setup
+          </button>
+        </div>
+        <div className="title-card-meta" aria-label="Default scenario">
+          <SummaryTile
+            icon={<Shield size={18} />}
+            label="Army A"
+            tone="army-a"
+            value={`${totalForArmy(setup.armyA)} units`}
+          />
+          <SummaryTile
+            icon={<Crosshair size={18} />}
+            label="Army B"
+            tone="army-b"
+            value={`${totalForArmy(setup.armyB)} units`}
+          />
+          <SummaryTile icon={<MapIcon size={18} />} label="Terrain" value={terrain} />
+        </div>
+      </section>
+      <div className="title-card-visual" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+    </main>
+  );
+};
 
 const AppFatalErrorScreen = ({
   error,
@@ -580,11 +635,13 @@ const SetupScreen = ({
   setup,
   setSetup,
   onStart,
+  onBackToTitle,
 }: {
   registry: ContentRegistry;
   setup: BattleSetupDraft;
   setSetup: (setup: BattleSetupDraft) => void;
   onStart: () => void;
+  onBackToTitle: () => void;
 }) => {
   const diagnostics = validateBattleSetupDraft(setup, registry);
   const odds = diagnostics.length === 0 ? estimateVagueOdds(setup, registry) : "Invalid setup";
@@ -592,46 +649,26 @@ const SetupScreen = ({
   const diagnosticsId = "setup-validation-diagnostics";
   return (
     <main className="setup-layout">
-      <header className="app-header command-header">
+      <header className="setup-header">
         <div className="header-copy">
           <p className="eyebrow header-eyebrow">
-            <Swords size={14} />
-            Simulator console
+            <Gauge size={14} />
+            Setup
           </p>
-          <h1>Impossible Battlegrounds</h1>
-          <p>Evidence-informed deterministic sandbox battles.</p>
+          <h1>Battle setup</h1>
+          <p>Choose two armies, tune the scenario, then run the deterministic battle.</p>
         </div>
-        <div className="command-visual" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="identity-pill">
-          <Activity size={16} />
-          v1 simulation
+        <div className="setup-header-actions">
+          <button className="secondary" type="button" onClick={onBackToTitle}>
+            <ArrowLeft size={16} />
+            Title card
+          </button>
+          <div className="identity-pill">
+            <Activity size={16} />
+            v1 simulation
+          </div>
         </div>
       </header>
-      <section className="mission-summary" aria-label="Battle summary">
-        <SummaryTile
-          icon={<Shield size={18} />}
-          label="Army A"
-          tone="army-a"
-          value={`${totalForArmy(setup.armyA)} units`}
-        />
-        <SummaryTile
-          icon={<Crosshair size={18} />}
-          label="Army B"
-          tone="army-b"
-          value={`${totalForArmy(setup.armyB)} units`}
-        />
-        <SummaryTile
-          icon={<MapIcon size={18} />}
-          label="Terrain"
-          value={registry.terrainMap.get(setup.terrainId)?.displayName ?? "Unknown"}
-        />
-        <SummaryTile icon={<Gauge size={18} />} label="Forecast" tone="forecast" value={odds} />
-      </section>
       <div className="armies-grid">
         <ArmyPanel
           registry={registry}
@@ -1344,7 +1381,7 @@ const ReportScreen = ({
 const BattleApp = () => {
   const registry = useMemo(() => loadContentRegistry(), []);
   const [setup, setSetup] = useState<BattleSetupDraft>(() => createDefaultSetup(registry));
-  const [screen, setScreen] = useState<Screen>("setup");
+  const [screen, setScreen] = useState<Screen>("title");
   const [loading, setLoading] = useState<LoadingState>({
     step: "Preparing terrain...",
     progress: 0,
@@ -1533,6 +1570,16 @@ const BattleApp = () => {
 
   useEffect(() => stopActiveSimulation, [stopActiveSimulation]);
 
+  if (screen === "title") {
+    return (
+      <TitleScreen
+        registry={registry}
+        setup={setup}
+        onCustomize={() => setScreen("setup")}
+        onStart={() => startBattle()}
+      />
+    );
+  }
   if (screen === "loading") {
     return <LoadingScreen loading={loading} />;
   }
@@ -1570,7 +1617,13 @@ const BattleApp = () => {
     );
   }
   return (
-    <SetupScreen registry={registry} setup={setup} setSetup={setSetup} onStart={startBattle} />
+    <SetupScreen
+      registry={registry}
+      setup={setup}
+      setSetup={setSetup}
+      onBackToTitle={() => setScreen("title")}
+      onStart={startBattle}
+    />
   );
 };
 

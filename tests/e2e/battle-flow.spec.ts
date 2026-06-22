@@ -57,7 +57,7 @@ test.describe("Impossible Battlegrounds user flow", () => {
     expect(download.suggestedFilename()).toContain(DEFAULT_RESULT_HASH);
 
     await page.getByRole("button", { name: /Return to setup/i }).click();
-    await expect(page.getByRole("heading", { name: "Impossible Battlegrounds" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Battle setup" })).toBeVisible();
     await expect(page.locator("input").filter({ hasText: "" }).first()).toBeVisible();
   });
 
