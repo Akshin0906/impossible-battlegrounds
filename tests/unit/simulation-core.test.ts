@@ -36,9 +36,9 @@ const REQUIRED_UNIT_IDS = [
 const REQUIRED_TERRAIN_IDS = ["open_field", "forest", "urban_blocks", "rocky_hills"] as const;
 
 const EXPECTED_RESULT_HASHES = {
-  infantryVsWolvesAlpha: "3edb9f47",
-  infantryVsWolvesBeta: "794b17f3",
-  androidVsBears: "756782dd",
+  infantryVsWolvesAlpha: "06efc681",
+  infantryVsWolvesBeta: "1396f65d",
+  androidVsBears: "c8818c7e",
 } as const;
 
 const infantryVsWolvesDraft = (
@@ -195,6 +195,15 @@ const expectReportToReconcile = (result: BattleResult) => {
   );
 };
 
+const expectNoRouting = (result: BattleResult) => {
+  expect(result.finalUnits.map((unit) => unit.moraleState)).not.toContain("routing");
+  expect(result.timeline.events.filter((event) => event.type === "rout")).toEqual([]);
+  expect(result.report.totalRouted).toBe(0);
+  expect(result.report.morale.unitsRouted).toBe(0);
+  expect(result.report.morale.armyCollapse).toBeUndefined();
+  expect(result.report.morale.armyCollapses).toEqual([]);
+};
+
 const expectCoreInvariants = (result: BattleResult) => {
   expect(result.report.resultHash).toBe(result.resultHash);
   expect(result.report.seed).toBe(result.normalizedSetup.seed);
@@ -207,6 +216,7 @@ const expectCoreInvariants = (result: BattleResult) => {
     expect(sample.unitState).toHaveLength(result.finalUnits.length * TIMELINE_STRIDE);
   }
   expectReportToReconcile(result);
+  expectNoRouting(result);
 };
 
 const listSourceFiles = (directory: string): string[] =>
@@ -295,7 +305,7 @@ describe("simulation core verification", () => {
     expectReportToReconcile(runBattle(infantryVsWolvesDraft("verify-alpha")));
   });
 
-  it("keeps Combat Android units from routing in a representative battle", () => {
+  it("keeps units from routing in a representative battle", () => {
     const result = runBattle(androidVsBearsDraft());
     const androidIds = new Set(
       result.finalUnits
@@ -305,11 +315,7 @@ describe("simulation core verification", () => {
 
     expect(androidIds.size).toBeGreaterThan(0);
     expect(result.resultHash).toBe(EXPECTED_RESULT_HASHES.androidVsBears);
-    expect(
-      result.finalUnits
-        .filter((unit) => unit.unitTypeId === "combat_android")
-        .map((unit) => unit.moraleState),
-    ).not.toContain("routing");
+    expectNoRouting(result);
     expect(
       result.timeline.events.filter(
         (event) => event.type === "rout" && event.actorUnitId && androidIds.has(event.actorUnitId),

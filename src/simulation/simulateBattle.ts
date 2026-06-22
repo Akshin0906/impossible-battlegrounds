@@ -181,10 +181,13 @@ const getAmmoMetric = (
 const isAlive = (unit: SimUnit): boolean => unit.healthState !== "dead";
 
 const isCombatEffective = (unit: SimUnit): boolean =>
-  unit.healthState !== "dead" && unit.healthState !== "downed" && unit.moraleState !== "routing";
+  unit.healthState !== "dead" && unit.healthState !== "downed";
 
 const hasCombatEffectiveArmy = (units: SimUnit[], armyId: ArmyId): boolean =>
   units.some((unit) => unit.armyId === armyId && isCombatEffective(unit));
+
+const hasLivingArmy = (units: SimUnit[], armyId: ArmyId): boolean =>
+  units.some((unit) => unit.armyId === armyId && isAlive(unit));
 
 const canAct = (unit: SimUnit): boolean => isCombatEffective(unit);
 
@@ -500,22 +503,6 @@ const moveTowardOpen = (
   );
 };
 
-const moveAwayOpen = (
-  terrain: RuntimeTerrain,
-  current: Vec3,
-  threat: Vec3,
-  maxDistance: number,
-): Vec3 => {
-  return moveDirectionalOpen(
-    terrain,
-    current,
-    current.x - threat.x,
-    current.z - threat.z,
-    maxDistance,
-    (candidate) => -distanceSq2(candidate, threat),
-  );
-};
-
 const instantiateArmy = (
   setup: NormalizedBattleSetup,
   registry: ContentRegistry,
@@ -737,9 +724,6 @@ const targetScore = (
   if (profile.targetPriority === "isolated") {
     score -= candidate.isInFormation ? 0 : 1400;
   }
-  if (candidate.moraleState === "routing") {
-    score -= unit.definition.category === "animal" ? 900 : -300;
-  }
   return score;
 };
 
@@ -821,8 +805,6 @@ const applyMoraleLoss = (
   amount: number,
   time: number,
   events: BattleEvent[],
-  metrics: SimulationMetrics,
-  reason: string,
 ): void => {
   if (hasNoMorale(unit) || unit.healthState === "dead" || unit.healthState === "downed") {
     return;
@@ -843,11 +825,7 @@ const applyMoraleLoss = (
   if (unit.morale < 42 && unit.moraleState === "steady") {
     unit.moraleState = "shaken";
   }
-  if (
-    unit.morale <= routeThreshold &&
-    unit.definition.traits.includes("rampage") &&
-    unit.moraleState !== "routing"
-  ) {
+  if (unit.morale <= routeThreshold && unit.definition.traits.includes("rampage")) {
     unit.morale = Math.max(unit.morale, routeThreshold + 6);
     unit.moraleState = "shaken";
     unit.currentAction = "charging";
@@ -862,33 +840,13 @@ const applyMoraleLoss = (
         squadId: unit.squadId,
         armyId: unit.armyId,
         position: unit.position,
-        message: `${unit.definition.displayName} rampaged instead of routing.`,
+        message: `${unit.definition.displayName} rampaged under morale pressure.`,
       });
     }
     return;
   }
-  if (unit.morale <= routeThreshold && unit.moraleState !== "routing") {
-    unit.moraleState = "routing";
-    unit.currentAction = "routing";
-    const event: BattleEvent = {
-      time,
-      tick: Math.round(time / TICK_SECONDS),
-      type: "rout",
-      actorUnitId: unit.id,
-      squadId: unit.squadId,
-      armyId: unit.armyId,
-      position: unit.position,
-      message: `${unit.definition.displayName} routed: ${reason}`,
-    };
-    events.push(event);
-    events.push({
-      ...event,
-      type: "major_alert",
-      message: `${unit.armyId === "A" ? "Army A" : "Army B"} unit routed under ${reason}.`,
-    });
-    if (!metrics.firstRout) {
-      metrics.firstRout = { squadId: unit.squadId, time };
-    }
+  if (unit.morale <= routeThreshold) {
+    unit.moraleState = "shaken";
   }
 };
 
@@ -898,8 +856,6 @@ const moraleShockNearby = (
   amount: number,
   time: number,
   events: BattleEvent[],
-  metrics: SimulationMetrics,
-  reason: string,
 ): void => {
   for (const unit of units) {
     if (unit.armyId === source.armyId || !isAlive(unit)) {
@@ -907,7 +863,7 @@ const moraleShockNearby = (
     }
     const range = source.definition.fear > 40 ? 38 : 22;
     if (distanceSq2(source.position, unit.position) <= range * range) {
-      applyMoraleLoss(unit, amount, time, events, metrics, reason);
+      applyMoraleLoss(unit, amount, time, events);
     }
   }
 };
@@ -927,7 +883,6 @@ const setDead = (
   unit.currentAction = "dead";
   unit.timeOfDeath = time;
   unit.deathCause = cause;
-  unit.moraleState = unit.moraleState === "routing" ? "routing" : unit.moraleState;
   actor && (actor.kills += 1);
   events.push({
     time,
@@ -1042,37 +997,14 @@ const applyDamage = (
   }
 
   if (
-    target.health <= -18 ||
+    target.health <= 0 ||
     target.wounds.some((wound) => wound.location === "head" && wound.severity === "critical")
   ) {
     setDead(target, cause, time, events, actor);
-  } else if (target.health <= 0 && target.healthState !== "downed") {
-    target.healthState = "downed";
-    target.currentAction = "downed";
-    target.timeDowned = time;
-    events.push({
-      time,
-      tick: Math.round(time / TICK_SECONDS),
-      type: "unit_down",
-      actorUnitId: actor?.id,
-      targetUnitId: target.id,
-      armyId: target.armyId,
-      squadId: target.squadId,
-      position: target.position,
-      damageCause: cause,
-      message: `${target.definition.displayName} was downed.`,
-    });
   } else {
     target.healthState = healthStateForHealth(target.health, target.wounds);
   }
-  applyMoraleLoss(
-    target,
-    damage * 0.16 + target.suppression * 0.025,
-    time,
-    events,
-    metrics,
-    "damage and suppression",
-  );
+  applyMoraleLoss(target, damage * 0.16 + target.suppression * 0.025, time, events);
 };
 
 const applyBleeding = (
@@ -1086,12 +1018,10 @@ const applyBleeding = (
   }
   const loss = unit.bleedingState === "severe" ? 0.52 : 0.12;
   unit.health = quantize(unit.health - loss, 0.01);
-  if (
-    unit.health <= -10 ||
-    (unit.health <= 0 && unit.healthState === "downed" && unit.bleedingState === "severe")
-  ) {
+  if (unit.health <= 0) {
+    const bleedDamage = Math.abs(unit.health);
     setDead(unit, "bleed_out", time, events);
-    metrics.damageByCause.bleed_out += Math.abs(unit.health);
+    metrics.damageByCause.bleed_out += bleedDamage;
     events.push({
       time,
       tick: Math.round(time / TICK_SECONDS),
@@ -1126,8 +1056,7 @@ const hitChance = (
           0.12,
           1,
         );
-  const moraleModifier =
-    attacker.moraleState === "steady" ? 1 : attacker.moraleState === "shaken" ? 0.72 : 0.25;
+  const moraleModifier = attacker.moraleState === "steady" ? 1 : 0.72;
   const woundModifier =
     attacker.healthState === "healthy" ? 1 : attacker.healthState === "wounded" ? 0.82 : 0.62;
   const suppressionModifier = clamp(1 - attacker.suppression / 150, 0.35, 1);
@@ -1138,11 +1067,7 @@ const hitChance = (
       ? 1 - (1 - terrain.definition.visibilityModifier) * visibilityRangeWeight
       : clamp(0.9 + terrain.definition.visibilityModifier * 0.1, 0.8, 1);
   const targetMovementModifier =
-    target.currentAction === "routing" ||
-    target.currentAction === "charging" ||
-    target.currentAction === "advancing"
-      ? 0.82
-      : 1;
+    target.currentAction === "charging" || target.currentAction === "advancing" ? 0.82 : 1;
   const targetSizeModifier = clamp(target.definition.size, 0.55, 2.4);
   const elevationModifier =
     terrain.definition.id === "rocky_hills" && attacker.position.y > target.position.y ? 1.12 : 1;
@@ -1410,8 +1335,6 @@ const fireWeapon = (
         (attacker.definition.fear + attacker.fearBoost) * 0.035,
         time,
         events,
-        metrics,
-        "fear",
       );
       events.push({
         time,
@@ -1422,7 +1345,7 @@ const fireWeapon = (
         position: attacker.position,
         message:
           attacker.definition.id === "dark_space_warlord"
-            ? "Dark Space Warlord fear aura triggered a rout risk."
+            ? "Dark Space Warlord fear aura shook nearby enemies."
             : `${attacker.definition.displayName} caused a fear shock.`,
       });
     }
@@ -1430,27 +1353,9 @@ const fireWeapon = (
   return true;
 };
 
-const centerOfEnemies = (unit: SimUnit, units: SimUnit[]): Vec3 => {
-  let x = 0;
-  let z = 0;
-  let count = 0;
-  for (const candidate of units) {
-    if (candidate.armyId !== unit.armyId && isAlive(candidate)) {
-      x += candidate.position.x;
-      z += candidate.position.z;
-      count += 1;
-    }
-  }
-  if (count === 0) {
-    return unit.position;
-  }
-  return { x: x / count, y: 0, z: z / count };
-};
-
 const movementSpeed = (unit: SimUnit, terrain: RuntimeTerrain): number => {
   const woundPenalty = unit.wounds.some((wound) => wound.location.includes("leg")) ? 0.62 : 1;
-  const moralePenalty =
-    unit.moraleState === "shaken" ? 0.88 : unit.moraleState === "routing" ? 1.15 : 1;
+  const moralePenalty = unit.moraleState === "shaken" ? 0.88 : 1;
   const armorPenalty = unit.armorBoost > 8 ? 0.9 : 1;
   return Math.max(
     0.5,
@@ -1485,9 +1390,6 @@ const updateMovement = (
   unit: SimUnit,
   target: SimUnit,
   terrain: RuntimeTerrain,
-  units: SimUnit[],
-  time: number,
-  events: BattleEvent[],
   options: { forceContact?: boolean } = {},
 ): void => {
   const distance = distance2(unit.position, target.position);
@@ -1495,20 +1397,12 @@ const updateMovement = (
   const preferredRange = preferredEngagementRange(unit);
   const forceContact = options.forceContact === true;
   const speed = movementSpeed(unit, terrain) * TICK_SECONDS;
-  if (unit.moraleState === "routing") {
-    const awayFrom = centerOfEnemies(unit, units);
-    unit.position = moveAwayOpen(terrain, unit.position, awayFrom, speed * 1.15);
-    unit.rotationY = headingTo(awayFrom, unit.position);
-    unit.currentAction = "routing";
-    return;
-  }
   const coverWanted =
     unit.aiProfile.coverSeeking > 0.4 &&
     hasRanged &&
     !forceContact &&
     terrain.coverNodes.length > 0 &&
-    distance < 260 &&
-    target.currentAction !== "routing";
+    distance < 260;
   if (coverWanted) {
     const cover = nearestCover(
       terrain,
@@ -1528,17 +1422,6 @@ const updateMovement = (
     }
   } else {
     unit.coverQuality = Math.max(0, unit.coverQuality - 0.02);
-  }
-  if (
-    !forceContact &&
-    hasRanged &&
-    distance < Math.min(18, preferredRange * 0.45) &&
-    target.definition.category !== "modern"
-  ) {
-    unit.position = moveAwayOpen(terrain, unit.position, target.position, speed * 0.75);
-    unit.rotationY = headingTo(unit.position, target.position);
-    unit.currentAction = "repositioning";
-    return;
   }
   if (
     forceContact ||
@@ -1561,25 +1444,6 @@ const updateMovement = (
   if (unit.coverQuality > 0.2) {
     const key = unit.armyId;
     void key;
-  }
-  if (
-    unit.definition.traits.includes("flight_burst") &&
-    distance < 35 &&
-    time >= unit.actionLockUntil
-  ) {
-    const away = moveAwayOpen(terrain, unit.position, target.position, 24);
-    unit.position = away;
-    unit.actionLockUntil = time + 8;
-    unit.currentAction = "repositioning";
-    events.push({
-      time,
-      tick: Math.round(time / TICK_SECONDS),
-      type: "major_alert",
-      actorUnitId: unit.id,
-      armyId: unit.armyId,
-      position: unit.position,
-      message: "Powered Armor Champion used a flight burst to reposition.",
-    });
   }
 };
 
@@ -1605,15 +1469,6 @@ const processUnit = (
       unit.moraleState = "steady";
     }
   }
-  if (
-    unit.moraleState === "routing" &&
-    unit.suppression < 8 &&
-    time - unit.lastDamageTime > 18 &&
-    unit.morale > 55
-  ) {
-    unit.moraleState = "shaken";
-    unit.currentAction = "advancing";
-  }
   if (isAlive(unit)) {
     applyBleeding(unit, time, events, metrics);
   }
@@ -1624,20 +1479,6 @@ const processUnit = (
     if (unit.healthState === "dead") {
       unit.currentAction = "dead";
     }
-    if (
-      unit.moraleState === "routing" &&
-      unit.healthState !== "dead" &&
-      unit.healthState !== "downed"
-    ) {
-      const threat = centerOfEnemies(unit, units);
-      unit.position = moveAwayOpen(
-        terrain,
-        unit.position,
-        threat,
-        movementSpeed(unit, terrain) * TICK_SECONDS,
-      );
-      unit.rotationY = headingTo(threat, unit.position);
-    }
     return;
   }
   updateReloads(unit, time, metrics);
@@ -1646,7 +1487,7 @@ const processUnit = (
   unit.targetUnitIndex = contactTarget?.index;
   if (!target) {
     if (contactTarget) {
-      updateMovement(unit, contactTarget, terrain, units, time, events, { forceContact: true });
+      updateMovement(unit, contactTarget, terrain, { forceContact: true });
     } else {
       unit.currentAction = "waiting";
     }
@@ -1659,7 +1500,7 @@ const processUnit = (
   const nearbyFear = target.definition.fear + target.fearBoost;
   if (nearbyFear > 30 && distance < 34) {
     metrics.fearEvents += nearbyFear > 60 ? 1 : 0;
-    applyMoraleLoss(unit, nearbyFear * 0.012, time, events, metrics, "fear pressure");
+    applyMoraleLoss(unit, nearbyFear * 0.012, time, events);
   }
   const weapon = chooseWeapon(unit, target, units, distance, time);
   if (weapon) {
@@ -1679,7 +1520,7 @@ const processUnit = (
       return;
     }
   }
-  updateMovement(unit, target, terrain, units, time, events);
+  updateMovement(unit, target, terrain);
   if (wasDeadAtTurnStart) {
     unit.currentAction = "dead";
   }
@@ -1708,7 +1549,7 @@ const updateFormationBreaks = (
       for (const unit of squadUnits) {
         unit.isInFormation = false;
         unit.formationCohesion = clamp(unit.formationCohesion * 0.52, 0, 100);
-        applyMoraleLoss(unit, 8, time, events, metrics, "formation break");
+        applyMoraleLoss(unit, 8, time, events);
       }
       events.push({
         time,
@@ -1783,22 +1624,19 @@ const closestContestingDistance = (units: SimUnit[]): number => {
 };
 
 const evaluateOutcome = (units: SimUnit[], time: number): BattleOutcome | undefined => {
-  const effectiveA = hasCombatEffectiveArmy(units, "A");
-  const effectiveB = hasCombatEffectiveArmy(units, "B");
-  if (!effectiveA && !effectiveB) {
-    const anySurvivors = units.some((unit) => unit.healthState !== "dead");
+  const livingA = hasLivingArmy(units, "A");
+  const livingB = hasLivingArmy(units, "B");
+  if (!livingA && !livingB) {
     return {
       kind: "draw",
-      reason: anySurvivors
-        ? `Both armies became combat-ineffective at ${quantize(time, 0.1)} seconds.`
-        : `Mutual elimination at ${quantize(time, 0.1)} seconds.`,
+      reason: `Mutual elimination at ${quantize(time, 0.1)} seconds.`,
     };
   }
-  if (!effectiveA) {
-    return { kind: "army_b_victory", reason: "Army A has no combat-effective units." };
+  if (!livingA) {
+    return { kind: "army_b_victory", reason: "Army A has no living units." };
   }
-  if (!effectiveB) {
-    return { kind: "army_a_victory", reason: "Army B has no combat-effective units." };
+  if (!livingB) {
+    return { kind: "army_a_victory", reason: "Army B has no living units." };
   }
   const canAffect = (armyId: ArmyId): boolean =>
     units

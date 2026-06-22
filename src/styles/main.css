@@ -1018,7 +1018,8 @@ label span {
 }
 
 .stage-hint,
-.completion-banner {
+.completion-banner,
+.battlefield-status {
   position: absolute;
   z-index: 2;
   border: 1px solid rgba(238, 245, 235, 0.14);
@@ -1037,9 +1038,97 @@ label span {
   font-weight: 850;
 }
 
+.battlefield-status {
+  top: 0.75rem;
+  left: 50%;
+  display: grid;
+  gap: 0.45rem;
+  width: min(33rem, calc(100% - 1.5rem));
+  padding: 0.65rem 0.75rem;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+.battlefield-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.battlefield-counts div {
+  display: grid;
+  gap: 0.08rem;
+  min-width: 0;
+}
+
+.battlefield-counts strong {
+  color: var(--ink);
+  font-size: 1.15rem;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.battlefield-counts span,
+.battlefield-health-label {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.battlefield-counts .army-a-count strong {
+  color: var(--army-a);
+}
+
+.battlefield-counts .army-b-count strong {
+  color: var(--army-b);
+}
+
+.battlefield-health-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.battlefield-health-label strong {
+  color: var(--ink);
+}
+
+.army-health-rows {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.army-health-row {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.battlefield-health-track {
+  height: 0.48rem;
+  overflow: hidden;
+  border: 1px solid rgba(238, 245, 235, 0.16);
+  border-radius: 999px;
+  background: rgba(4, 8, 5, 0.92);
+}
+
+.battlefield-health-track div {
+  height: 100%;
+  transition: width 0.15s linear;
+}
+
+.army-a-health-track div {
+  background: linear-gradient(90deg, var(--army-a), var(--accent));
+}
+
+.army-b-health-track div {
+  background: linear-gradient(90deg, var(--army-b), var(--accent-warm));
+}
+
 .completion-banner {
   left: 50%;
-  top: 0.85rem;
+  top: 8.2rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
