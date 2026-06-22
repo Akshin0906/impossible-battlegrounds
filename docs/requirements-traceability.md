@@ -1,0 +1,34 @@
+# Requirements Traceability
+
+| Spec area | Requirement                                                                                                     | Evidence target                                                          | Status   |
+| --------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | -------- |
+| 0         | Owner approval gate completed with exact phrase                                                                 | Conversation approval and WP-00 note                                     | Approved |
+| 2         | Locked Vite/React/strict TypeScript/Three/Worker/Vitest/Playwright/ESLint/Prettier/Actions stack                | Root config, source tree, workflow, validation commands                  | Passed   |
+| 3         | Generic original content and asset license ledger                                                               | `THIRD_PARTY_ASSETS.md`, procedural renderer, legal note                 | Passed   |
+| 4         | Serious sandbox auto-battler, precomputed result, no sound/saves/cloud sharing, gore always on                  | UI, renderer, docs, tests                                                | Passed   |
+| 5         | Full setup to report loop                                                                                       | E2E tests and manual validation                                          | Passed   |
+| 6         | All 12 unit types                                                                                               | `src/data/units.json`, setup UI, renderer silhouettes, tests             | Passed   |
+| 7         | Open field, forest, urban blocks, rocky hills                                                                   | `src/data/terrains.json`, simulation terrain generation, renderer, tests | Passed   |
+| 8         | Army builder with squads, counts, loadouts, formations, roles, duplicate/remove                                 | Setup feature tests and UI                                               | Passed   |
+| 9         | Starting distance, seed controls, deterministic vague odds                                                      | Normalization, odds estimator, UI tests                                  | Passed   |
+| 10        | Authoritative worker precompute, fixed timestep, timeline packing, deterministic boundary                       | `src/simulation`, `src/workers`, tests                                   | Passed   |
+| 11        | Lifecycle, wounds, morale, ammo, ranged, melee, formations, cover, animal/fiction AI, deployment, outcome rules | Simulation modules and invariant tests                                   | Passed   |
+| 12        | Terrain obstacles and simplified line of sight                                                                  | Terrain generation and targeting tests                                   | Passed   |
+| 13        | Timeline playback, camera, speed controls, skip report, corpses/effects                                         | Three renderer and E2E tests                                             | Passed   |
+| 14        | Unit inspection                                                                                                 | Battle feature UI and E2E test                                           | Passed   |
+| 15        | Major alerts only during playback                                                                               | Alert filtering tests and UI                                             | Passed   |
+| 16        | Reconciled report and metric-backed factors                                                                     | Report module tests and UI                                               | Passed   |
+| 17        | Data-driven repository structure, validation, versions                                                          | Domain/data modules and tests                                            | Passed   |
+| 18        | 100 vs. 100 target, warnings, optimization, performance documentation                                           | Performance script and `docs/performance.md`                             | Passed   |
+| 19        | Hidden developer mode via `~` or `?dev=true`                                                                    | Developer overlay and E2E tests                                          | Passed   |
+| 20        | Milestones 1-8 complete, vertical slice not final stop                                                          | Package map and final validation                                         | Passed   |
+| 21        | Product, engineering, deployment-ready gates                                                                    | `docs/release-validation.md`, command output                             | Passed   |
+| 22        | v1 non-goals excluded                                                                                           | Code review and docs                                                     | Passed   |
+| 23        | Accuracy over balance, precompute first, data-driven expansion, serious tone                                    | Docs and review                                                          | Passed   |
+| 24        | Risks addressed with dev mode, determinism, performance, calibration                                            | Tests and docs                                                           | Passed   |
+| 25        | Work packages and subagent workflow                                                                             | `docs/work-packages`, reviewed subagent output                           | Passed   |
+| 26        | Determinism, metamorphic, E2E, manual visual review                                                             | Vitest, Playwright, validation report                                    | Passed   |
+| 27        | Research and calibration deliverables                                                                           | `docs/assumptions-and-sources.md`, `docs/calibration.md`                 | Passed   |
+| 28        | Required repository documentation                                                                               | README and docs set                                                      | Passed   |
+| 29        | Final completion report                                                                                         | Final response and `docs/release-validation.md`                          | Passed   |
+| 30        | Resolved ambiguities preserved                                                                                  | Tests/docs/code review                                                   | Passed   |

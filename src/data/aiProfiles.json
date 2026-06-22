@@ -1,0 +1,122 @@
+[
+  {
+    "id": "historical_formation",
+    "displayName": "Historical Formation",
+    "targetPriority": "nearest",
+    "coverSeeking": 0.05,
+    "aggression": 0.72,
+    "flankPreference": 0.12,
+    "moraleStyle": "disciplined",
+    "special": ["keep_cohesion", "throw_before_melee"]
+  },
+  {
+    "id": "historical_shock",
+    "displayName": "Historical Shock",
+    "targetPriority": "nearest",
+    "coverSeeking": 0.02,
+    "aggression": 0.88,
+    "flankPreference": 0.08,
+    "moraleStyle": "disciplined",
+    "special": ["charge_bonus"]
+  },
+  {
+    "id": "historical_skirmish",
+    "displayName": "Historical Skirmish",
+    "targetPriority": "threat",
+    "coverSeeking": 0.12,
+    "aggression": 0.7,
+    "flankPreference": 0.22,
+    "moraleStyle": "normal",
+    "special": ["hybrid_range"]
+  },
+  {
+    "id": "modern_cover",
+    "displayName": "Modern Cover",
+    "targetPriority": "threat",
+    "coverSeeking": 0.72,
+    "aggression": 0.58,
+    "flankPreference": 0.28,
+    "moraleStyle": "disciplined",
+    "special": ["cover", "grenade_safety", "fallback"]
+  },
+  {
+    "id": "modern_assault",
+    "displayName": "Modern Assault",
+    "targetPriority": "threat",
+    "coverSeeking": 0.62,
+    "aggression": 0.72,
+    "flankPreference": 0.24,
+    "moraleStyle": "disciplined",
+    "special": ["cover", "grenade_safety", "assault"]
+  },
+  {
+    "id": "modern_elite",
+    "displayName": "Modern Elite",
+    "targetPriority": "threat",
+    "coverSeeking": 0.86,
+    "aggression": 0.68,
+    "flankPreference": 0.42,
+    "moraleStyle": "disciplined",
+    "special": ["cover", "grenade_safety", "elite_awareness"]
+  },
+  {
+    "id": "wolf_pack",
+    "displayName": "Wolf Pack",
+    "targetPriority": "isolated",
+    "coverSeeking": 0,
+    "aggression": 0.84,
+    "flankPreference": 0.76,
+    "moraleStyle": "animal",
+    "special": ["pack_flank", "prefer_wounded"]
+  },
+  {
+    "id": "bear_charge",
+    "displayName": "Bear Charge",
+    "targetPriority": "nearest",
+    "coverSeeking": 0,
+    "aggression": 0.94,
+    "flankPreference": 0.04,
+    "moraleStyle": "animal",
+    "special": ["fear", "shock_charge"]
+  },
+  {
+    "id": "elephant_trample",
+    "displayName": "Elephant Trample",
+    "targetPriority": "cluster",
+    "coverSeeking": 0,
+    "aggression": 0.74,
+    "flankPreference": 0.08,
+    "moraleStyle": "animal",
+    "special": ["trample", "rampage", "fear"]
+  },
+  {
+    "id": "warlord",
+    "displayName": "Dark Space Warlord",
+    "targetPriority": "cluster",
+    "coverSeeking": 0.1,
+    "aggression": 0.9,
+    "flankPreference": 0.18,
+    "moraleStyle": "fearless",
+    "special": ["fear_aura", "deflection", "telekinetic_throw"]
+  },
+  {
+    "id": "powered_armor",
+    "displayName": "Powered Armor",
+    "targetPriority": "cluster",
+    "coverSeeking": 0.18,
+    "aggression": 0.74,
+    "flankPreference": 0.34,
+    "moraleStyle": "disciplined",
+    "special": ["flight_burst", "missiles", "maintain_range"]
+  },
+  {
+    "id": "android",
+    "displayName": "Combat Android",
+    "targetPriority": "threat",
+    "coverSeeking": 0.36,
+    "aggression": 0.66,
+    "flankPreference": 0.18,
+    "moraleStyle": "fearless",
+    "special": ["no_morale", "threat_priority"]
+  }
+]

@@ -1,0 +1,224 @@
+[
+  {
+    "id": "roman_standard",
+    "displayName": "Shield, Gladius, Pilum",
+    "unitTypeId": "roman_legionary",
+    "weapons": ["pilum", "gladius"],
+    "toggles": { "shield": true },
+    "notes": "One pilum throw before close-order melee."
+  },
+  {
+    "id": "knight_sword",
+    "displayName": "Sword and Heavy Armor",
+    "unitTypeId": "medieval_knight",
+    "weapons": ["arming_sword"],
+    "toggles": { "lanceCharge": false, "heavierArmor": true },
+    "notes": "Durable melee profile without extended lance reach."
+  },
+  {
+    "id": "knight_lance",
+    "displayName": "Lance Charge",
+    "unitTypeId": "medieval_knight",
+    "weapons": ["lance", "arming_sword"],
+    "toggles": { "lanceCharge": true, "heavierArmor": true },
+    "notes": "Higher opening charge damage with slower regrouping."
+  },
+  {
+    "id": "samurai_katana",
+    "displayName": "Katana",
+    "unitTypeId": "samurai",
+    "weapons": ["katana"],
+    "toggles": { "bow": false, "spear": false },
+    "notes": "Close-combat variant."
+  },
+  {
+    "id": "samurai_bow",
+    "displayName": "Bow and Katana",
+    "unitTypeId": "samurai",
+    "weapons": ["yumi_bow", "katana"],
+    "toggles": { "bow": true, "spear": false },
+    "notes": "Hybrid skirmisher with limited arrows."
+  },
+  {
+    "id": "samurai_spear",
+    "displayName": "Spear and Katana",
+    "unitTypeId": "samurai",
+    "weapons": ["yari", "katana"],
+    "toggles": { "bow": false, "spear": true },
+    "notes": "Longer melee reach."
+  },
+  {
+    "id": "army_rifleman_standard",
+    "displayName": "Rifleman",
+    "unitTypeId": "us_army_infantry",
+    "weapons": ["carbine", "grenade_m67"],
+    "toggles": { "grenades": true, "extraAmmo": false, "armor": "medium" },
+    "toggleOptions": { "armor": ["light", "medium", "heavy"] },
+    "notes": "Baseline rifleman with two grenades."
+  },
+  {
+    "id": "army_rifleman_extra_ammo",
+    "displayName": "Rifleman, Extra Ammo",
+    "unitTypeId": "us_army_infantry",
+    "weapons": ["carbine", "grenade_m67"],
+    "toggles": { "grenades": true, "extraAmmo": true, "armor": "medium" },
+    "toggleOptions": { "armor": ["light", "medium", "heavy"] },
+    "notes": "More endurance, same weapon profile."
+  },
+  {
+    "id": "army_rifleman_no_grenades",
+    "displayName": "Rifleman, No Grenades",
+    "unitTypeId": "us_army_infantry",
+    "weapons": ["carbine"],
+    "toggles": { "grenades": false, "extraAmmo": false, "armor": "medium" },
+    "toggleOptions": { "armor": ["light", "medium", "heavy"] },
+    "notes": "Prevents explosive friendly fire from this loadout."
+  },
+  {
+    "id": "marine_rifleman_standard",
+    "displayName": "Marine Rifleman",
+    "unitTypeId": "us_marine",
+    "weapons": ["carbine", "grenade_m67"],
+    "toggles": { "grenades": true, "extraAmmo": false, "armor": "medium" },
+    "toggleOptions": { "armor": ["light", "medium", "heavy"] },
+    "notes": "Aggressive rifleman with grenades."
+  },
+  {
+    "id": "marine_rifleman_extra_ammo",
+    "displayName": "Marine Rifleman, Extra Ammo",
+    "unitTypeId": "us_marine",
+    "weapons": ["carbine", "grenade_m67"],
+    "toggles": { "grenades": true, "extraAmmo": true, "armor": "medium" },
+    "toggleOptions": { "armor": ["light", "medium", "heavy"] },
+    "notes": "Higher endurance."
+  },
+  {
+    "id": "marine_rifleman_no_grenades",
+    "displayName": "Marine Rifleman, No Grenades",
+    "unitTypeId": "us_marine",
+    "weapons": ["carbine"],
+    "toggles": { "grenades": false, "extraAmmo": false, "armor": "medium" },
+    "toggleOptions": { "armor": ["light", "medium", "heavy"] },
+    "notes": "Rifle-only profile."
+  },
+  {
+    "id": "sof_standard",
+    "displayName": "SOF Standard",
+    "unitTypeId": "special_operations_soldier",
+    "weapons": ["elite_carbine", "sidearm", "grenade_m67"],
+    "toggles": { "grenades": true, "extraAmmo": false, "heavyArmor": false },
+    "notes": "Elite rifle, sidearm, and grenades."
+  },
+  {
+    "id": "sof_extra_ammo",
+    "displayName": "SOF Extra Ammo",
+    "unitTypeId": "special_operations_soldier",
+    "weapons": ["elite_carbine", "sidearm", "grenade_m67"],
+    "toggles": { "grenades": true, "extraAmmo": true, "heavyArmor": false },
+    "notes": "More rifle ammunition."
+  },
+  {
+    "id": "sof_heavy_armor",
+    "displayName": "SOF Heavy Armor",
+    "unitTypeId": "special_operations_soldier",
+    "weapons": ["elite_carbine", "sidearm", "grenade_m67"],
+    "toggles": { "grenades": true, "extraAmmo": false, "heavyArmor": true },
+    "notes": "Better protection with mild speed cost."
+  },
+  {
+    "id": "wolf_natural",
+    "displayName": "Natural Weapons",
+    "unitTypeId": "wolf",
+    "weapons": ["bite"],
+    "toggles": {},
+    "notes": "Pack bite attacks."
+  },
+  {
+    "id": "bear_natural",
+    "displayName": "Natural Weapons",
+    "unitTypeId": "grizzly_bear",
+    "weapons": ["claws"],
+    "toggles": {},
+    "notes": "Claw and bite shock attacks."
+  },
+  {
+    "id": "elephant_natural",
+    "displayName": "Trample",
+    "unitTypeId": "african_elephant",
+    "weapons": ["trample"],
+    "toggles": {},
+    "notes": "Massive trampling damage."
+  },
+  {
+    "id": "warlord_standard",
+    "displayName": "Blade and Telekinesis",
+    "unitTypeId": "dark_space_warlord",
+    "weapons": ["telekinetic_throw", "energy_blade"],
+    "toggles": { "strongerFearAura": false, "higherDeflection": false, "slowerHeavier": false },
+    "notes": "Baseline original archetype."
+  },
+  {
+    "id": "warlord_fear",
+    "displayName": "Amplified Fear Aura",
+    "unitTypeId": "dark_space_warlord",
+    "weapons": ["telekinetic_throw", "energy_blade"],
+    "toggles": { "strongerFearAura": true, "higherDeflection": false, "slowerHeavier": false },
+    "notes": "Stronger morale pressure."
+  },
+  {
+    "id": "warlord_deflection",
+    "displayName": "Deflection Focus",
+    "unitTypeId": "dark_space_warlord",
+    "weapons": ["telekinetic_throw", "energy_blade"],
+    "toggles": { "strongerFearAura": false, "higherDeflection": true, "slowerHeavier": true },
+    "notes": "More projectile deflection with speed cost."
+  },
+  {
+    "id": "powered_armor_standard",
+    "displayName": "Blasters and Missiles",
+    "unitTypeId": "powered_armor_champion",
+    "weapons": ["energy_blaster", "micro_missiles"],
+    "toggles": { "moreMissiles": false, "moreArmor": false, "moreMobility": false },
+    "notes": "Balanced powered armor profile."
+  },
+  {
+    "id": "powered_armor_more_missiles",
+    "displayName": "Expanded Missile Rack",
+    "unitTypeId": "powered_armor_champion",
+    "weapons": ["energy_blaster", "micro_missiles"],
+    "toggles": { "moreMissiles": true, "moreArmor": false, "moreMobility": false },
+    "notes": "More explosive capacity."
+  },
+  {
+    "id": "powered_armor_heavy",
+    "displayName": "Heavy Armor",
+    "unitTypeId": "powered_armor_champion",
+    "weapons": ["energy_blaster", "micro_missiles"],
+    "toggles": { "moreMissiles": false, "moreArmor": true, "moreMobility": false },
+    "notes": "More protection with slower repositioning."
+  },
+  {
+    "id": "android_standard",
+    "displayName": "Integrated Rifle",
+    "unitTypeId": "combat_android",
+    "weapons": ["android_rifle", "android_strike"],
+    "toggles": { "heavyWeapon": false, "heavyArmor": false, "fasterMobility": false },
+    "notes": "No morale, rifle and melee fallback."
+  },
+  {
+    "id": "android_heavy_weapon",
+    "displayName": "Heavy Rifle",
+    "unitTypeId": "combat_android",
+    "weapons": ["android_heavy_rifle", "android_strike"],
+    "toggles": { "heavyWeapon": true, "heavyArmor": false, "fasterMobility": false },
+    "notes": "Higher damage, lower rate of fire."
+  },
+  {
+    "id": "android_fast",
+    "displayName": "Fast Mobility",
+    "unitTypeId": "combat_android",
+    "weapons": ["android_rifle", "android_strike"],
+    "toggles": { "heavyWeapon": false, "heavyArmor": false, "fasterMobility": true },
+    "notes": "Faster advance with baseline armor."
+  }
+]

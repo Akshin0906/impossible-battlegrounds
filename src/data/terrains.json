@@ -1,0 +1,46 @@
+[
+  {
+    "id": "open_field",
+    "displayName": "Open Field",
+    "size": { "x": 640, "z": 360 },
+    "movementModifier": 1,
+    "visibilityModifier": 1,
+    "coverDensity": 0.04,
+    "elevationModifier": 0,
+    "obstacleDensity": 0.03,
+    "description": "Flat terrain with long lines of sight and sparse cover."
+  },
+  {
+    "id": "forest",
+    "displayName": "Forest",
+    "size": { "x": 560, "z": 360 },
+    "movementModifier": 0.78,
+    "visibilityModifier": 0.58,
+    "coverDensity": 0.72,
+    "elevationModifier": 0.05,
+    "obstacleDensity": 0.68,
+    "description": "Dense tree blockers, short sight lines, and plentiful cover nodes."
+  },
+  {
+    "id": "urban_blocks",
+    "displayName": "Urban Blocks",
+    "size": { "x": 520, "z": 340 },
+    "movementModifier": 0.86,
+    "visibilityModifier": 0.64,
+    "coverDensity": 0.8,
+    "elevationModifier": 0,
+    "obstacleDensity": 0.55,
+    "description": "Street grid, building blocks, wall cover, and close-range engagements."
+  },
+  {
+    "id": "rocky_hills",
+    "displayName": "Rocky Hills",
+    "size": { "x": 600, "z": 380 },
+    "movementModifier": 0.82,
+    "visibilityModifier": 0.82,
+    "coverDensity": 0.48,
+    "elevationModifier": 0.22,
+    "obstacleDensity": 0.45,
+    "description": "Low-poly slopes, rocks, and elevation-modified range."
+  }
+]
