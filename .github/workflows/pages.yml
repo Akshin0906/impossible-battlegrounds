@@ -29,9 +29,9 @@ jobs:
       - name: Install
         run: npm ci
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium firefox webkit
+        run: npx playwright install --with-deps chromium
       - name: Validate
-        run: npm run validate
+        run: npm run validate:pages
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3

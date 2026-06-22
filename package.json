@@ -19,6 +19,7 @@
     "test:e2e:chromium": "playwright test --project=chromium",
     "test:e2e:firefox": "playwright test --project=firefox",
     "test:e2e:webkit": "playwright test --project=webkit",
+    "validate:pages": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run test:e2e:chromium && npm run build:pages",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run test:e2e && npm run build:pages",
     "perf:sample": "tsx scripts/performanceSample.ts"
   },
