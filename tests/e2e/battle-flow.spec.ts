@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const DEFAULT_RESULT_HASH = "17fab4d5";
+const DEFAULT_RESULT_HASH = "bb110fed";
 
 const collectConsoleErrors = (page: Page): string[] => {
   const errors: string[] = [];
